@@ -1,0 +1,239 @@
+#!/usr/bin/env python3
+"""API-equivalent cost of Pi sessions, grouped by model, thinking effort and context size.
+
+Selects main sessions (explicit files, --last N, --since 3d, default: $PI_SESSION_FILE),
+adds their actor-subagent sessions (<session dir>/subagents/<session id>/*.jsonl) unless
+--no-subagents, de-duplicates entries copied by /fork or /clone, and sums usage the way
+Pi's /session does (tool/summary usage is keyed "Tools/summaries").
+
+Definitions
+  call     one usage record: an assistant message, or a usage/summary entry.
+  context  tokens the model read in one call = input + cacheRead + cacheWrite.
+  effort   thinking level of the call: the level stored on the message if present,
+           else the latest thinking_level_change on the entry's parent chain
+           (the branch the call was made on), else "unknown" (never guessed).
+  ctx_p50/ctx_p90/ctx_max  median / nearest-rank 90th percentile / maximum context over
+           calls with context > 0 (failed calls carry no usage). p90 is "-" for n < 10,
+           where it would equal the maximum.
+"""
+import argparse, bisect, json, math, os, re, statistics, sys, time
+from collections import Counter, defaultdict
+from pathlib import Path
+
+ROOT = Path.home() / ".pi/agent/sessions"
+PARTS = ("input", "output", "cacheRead", "cacheWrite")
+DIMS = ("model", "effort", "ctx")
+EFFORTS = ("off", "minimal", "low", "medium", "high", "xhigh", "max", "unknown")
+
+
+def tokens(s: str) -> int:
+    m = re.fullmatch(r"(\d+)([kKmM]?)", s)
+    if not m:
+        raise argparse.ArgumentTypeError("use e.g. 50k, 200000, 1m")
+    return int(m[1]) * {"": 1, "k": 1000, "m": 1000000}[m[2].lower()]
+
+
+def ctx_edges(s: str) -> list[int]:
+    edges = [tokens(x) for x in s.split(",")]
+    if edges != sorted(set(edges)) or edges[0] <= 0:
+        raise argparse.ArgumentTypeError("edges must be positive and strictly increasing")
+    return edges
+
+
+def human(n: int) -> str:
+    return f"{n // 1000000}m" if n % 1000000 == 0 else f"{n // 1000}k" if n % 1000 == 0 else str(n)
+
+
+def ctx_label(edges: list[int], i: int) -> str:
+    """Bin i is [edges[i-1], edges[i]); the first starts at 0, the last is open-ended."""
+    if i == 0:
+        return f"<{human(edges[0])}"
+    if i == len(edges):
+        return f">={human(edges[-1])}"
+    return f"{human(edges[i - 1])}-{human(edges[i])}"
+
+
+def project_dir(cwd: str) -> Path:
+    return ROOT / ("--" + cwd.strip("/").replace("/", "-") + "--")
+
+
+def duration(s: str) -> float:
+    m = re.fullmatch(r"(\d+(?:\.\d+)?)([mhdw])", s)
+    if not m:
+        raise argparse.ArgumentTypeError("use e.g. 90m, 12h, 3d, 2w")
+    return float(m[1]) * {"m": 60, "h": 3600, "d": 86400, "w": 604800}[m[2]]
+
+
+def select_main(a) -> list[Path]:
+    if a.files:
+        return [Path(f) for f in a.files]
+    if a.last is None and a.since is None:
+        env = os.environ.get("PI_SESSION_FILE")
+        if not env:
+            sys.exit("pass session files, --last N or --since D (or run inside Pi)")
+        return [Path(env)]
+    dirs = [d for d in ROOT.iterdir() if d.is_dir()] if a.all_projects else [project_dir(a.cwd)]
+    files = sorted((f for d in dirs for f in d.glob("*.jsonl")), key=lambda f: f.stat().st_mtime, reverse=True)
+    if a.since is not None:
+        cutoff = time.time() - a.since
+        files = [f for f in files if f.stat().st_mtime >= cutoff]
+    return files[: a.last] if a.last is not None else files
+
+
+def entries(path: Path, bad: list):
+    """Yield parsed JSONL entries. A line torn by a failed write (e.g. disk full) is
+    lost, but Pi's next entry may be glued to its tail: recover it by retrying from each
+    later '{"type":"'. Lines with nothing recoverable are recorded in `bad`."""
+    with path.open(errors="replace") as fh:
+        for n, line in enumerate(fh, 1):
+            try:
+                yield json.loads(line)
+                continue
+            except json.JSONDecodeError:
+                pass
+            for m in re.finditer(r'\{"type":"', line):
+                if m.start() == 0:
+                    continue
+                try:
+                    e = json.loads(line[m.start():])
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(e, dict) and "id" in e:  # skips nested {"type":"text"} blocks
+                    yield e
+                    break
+            else:
+                bad.append((path, n))
+                continue
+            bad.append((path, n))  # the torn head of this line is still lost
+
+
+def subagent_files(main: Path) -> list[Path]:
+    sid = next((e.get("id", "") for e in entries(main, []) ), "")
+    return sorted((main.parent / "subagents" / sid).glob("*.jsonl")) if sid else []
+
+
+def usage_of(e: dict):
+    """(model key, own effort or None, usage) for entries Pi counts toward session totals."""
+    t, m = e.get("type"), e.get("message") or {}
+    if t == "message" and m.get("role") == "assistant":
+        own = m.get("thinkingLevel") or m.get("providerThinkingLevel")
+        return f"{m.get('provider')}/{m.get('responseModel') or m.get('model')}", own, m.get("usage")
+    if t == "usage":
+        return f"{e.get('provider')}/{e.get('model')}", None, e.get("usage")
+    if t == "message" and m.get("role") == "toolResult" and m.get("usage"):
+        return "Tools/summaries", None, m["usage"]
+    if t in ("branch_summary", "compaction") and e.get("usage"):
+        return "Tools/summaries", None, e["usage"]
+    return None
+
+
+def percentile(xs: list[int], q: float) -> int:
+    """Nearest-rank percentile of a sorted list."""
+    return xs[max(math.ceil(q * len(xs)) - 1, 0)]
+
+
+class Group:
+    def __init__(self):
+        self.sums = defaultdict(float)
+        self.ctx = []
+        self.calls = 0
+
+    def add(self, u: dict, ctx: int):
+        self.calls += 1
+        for k in PARTS:
+            self.sums[k + "$"] += u.get("cost", {}).get(k, 0)
+            self.sums[k + "_tok"] += u.get(k, 0)
+        self.sums["total$"] += u.get("cost", {}).get("total", 0)
+        if ctx > 0:
+            self.ctx.append(ctx)
+
+
+def main():
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("files", nargs="*", help="main session .jsonl files")
+    p.add_argument("--last", type=int, metavar="N", help="N most recently modified sessions")
+    p.add_argument("--since", type=duration, metavar="D", help="sessions modified within D (90m, 12h, 3d, 2w)")
+    p.add_argument("--all-projects", action="store_true", help="all cwds, not just --cwd")
+    p.add_argument("--cwd", default=os.getcwd(), help="project whose sessions to scan (default: $PWD)")
+    p.add_argument("--no-subagents", action="store_true", help="exclude actor-subagent sessions")
+    p.add_argument("--by", default="model,effort", metavar="DIMS",
+                   help="comma list of grouping dimensions: model, effort, ctx (default: model,effort)")
+    p.add_argument("--ctx-edges", type=ctx_edges, default=ctx_edges("50k,100k,200k,400k"), metavar="E",
+                   help="context range boundaries for --by ctx (default: 50k,100k,200k,400k)")
+    a = p.parse_args()
+    by = [d.strip() for d in a.by.split(",") if d.strip()]
+    if not set(by) <= set(DIMS):
+        p.error(f"--by takes {', '.join(DIMS)}")
+    dims = [d for d in DIMS if d in by]  # fixed column order
+
+    mains = select_main(a)
+    subs = [] if a.no_subagents else [s for f in mains for s in subagent_files(f)]
+    seen, bad, groups, sources = set(), [], defaultdict(Group), Counter()
+    total = Group()
+    for f in mains + subs:
+        level_at = {}  # entry id -> thinking level in force at that entry, along the parent chain
+        for e in entries(f, bad):
+            if e.get("type") == "thinking_level_change":
+                level_at[e.get("id")] = e.get("thinkingLevel")
+            elif e.get("parentId") in level_at:
+                level_at[e.get("id")] = level_at[e["parentId"]]
+            hit = usage_of(e)
+            if not hit or not hit[2]:
+                continue
+            dedup = (e.get("id"), e.get("timestamp"))  # /fork and /clone copy entries verbatim
+            if dedup in seen:
+                continue
+            seen.add(dedup)
+            model, own, u = hit
+            if own:
+                effort, src = own, "message"
+            elif e.get("parentId") in level_at and level_at[e["parentId"]]:
+                effort, src = level_at[e["parentId"]], "history"
+            else:
+                effort, src = "unknown", "unknown"
+            sources[src] += 1
+            ctx = sum(u.get(k, 0) for k in ("input", "cacheRead", "cacheWrite"))
+            key = {"model": model, "effort": effort,
+                   "ctx": bisect.bisect_right(a.ctx_edges, ctx)}
+            groups[tuple(key[d] for d in dims)].add(u, ctx)
+            total.add(u, ctx)
+
+    print(f"{len(mains)} main + {len(subs)} subagent session files, {total.calls} calls; "
+          f"effort from message {sources['message']}, from history {sources['history']}, "
+          f"unknown {sources['unknown']}", file=sys.stderr)
+    if bad:
+        print(f"{len(bad)} torn lines (entry lost, glued successor recovered where possible) in {len({f for f, _ in bad})} files (cost under-counted)", file=sys.stderr)
+
+    def order(k):  # sort by model name, then effort low to high, then context range
+        v = dict(zip(dims, k))
+        return (str(v.get("model", "")),
+                EFFORTS.index(v["effort"]) if v.get("effort") in EFFORTS else len(EFFORTS),
+                v.get("ctx", 0))
+
+    hdr = dims + ["calls", "ctx_p50", "ctx_p90", "ctx_max", "total$", "$/call", "input$", "output$",
+                  "cacheRead$", "cacheWrite$", "out_share", "total$/Mout",
+                  "in_tok", "out_tok", "cacheRead_tok", "cacheWrite_tok"]
+    out = [hdr]
+
+    def row(label: list[str], g: Group):
+        r, c = g.sums, sorted(g.ctx)
+        share = r["output$"] / r["total$"] if r["total$"] else 0
+        per_mout = f"{r['total$'] / r['output_tok'] * 1e6:.2f}" if r["output_tok"] else "-"
+        per_call = f"{r['total$'] / g.calls:.4f}" if g.calls else "-"
+        return (label + [str(g.calls), f"{int(statistics.median(c))}" if c else "-",
+                         f"{percentile(c, 0.9)}" if len(c) >= 10 else "-", f"{c[-1]}" if c else "-",
+                         f"{r['total$']:.4f}", per_call]
+                + [f"{r[k]:.4f}" for k in ("input$", "output$", "cacheRead$", "cacheWrite$")]
+                + [f"{share:.3f}", per_mout] + [f"{int(r[k + '_tok'])}" for k in PARTS])
+
+    for k in sorted(groups, key=order):
+        label = [ctx_label(a.ctx_edges, v) if d == "ctx" else str(v) for d, v in zip(dims, k)]
+        out.append(row(label, groups[k]))
+    out.append(row(["TOTAL"] + [""] * (len(dims) - 1), total))
+    w = [max(len(r[i]) for r in out) for i in range(len(hdr))]
+    for r in out:
+        print("  ".join(c.ljust(w[i]) for i, c in enumerate(r)).rstrip())
+
+
+if __name__ == "__main__":
+    main()
