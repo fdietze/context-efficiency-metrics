@@ -22,6 +22,10 @@ Definitions
   total/out$ total$ / output$: dollars spent per dollar of generated output. 1 means
              all spend is output; 10 means 90% is spent (re-)reading context.
              Lower is more context-efficient.
+  miss$      cost of cache misses: prompt tokens that were cached at the previous
+             main-model call on the same branch, but had to be processed again
+             (cache expired after a pause, model switch, compaction, context edit).
+             Part of input$ + cacheWrite$, not extra.
   think/out  reasoning tokens / output tokens (providers count thinking as output),
              over calls whose usage reports reasoning. "-" if none do. Some providers
              report 0 instead of omitting the field, which biases this toward 0.
@@ -31,6 +35,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 ROOT = Path.home() / ".pi/agent/sessions"
+SIDE = "Tools/summaries"  # side LLM calls (tool summaries, compaction), not the main chain
 PARTS = ("input", "output", "cacheRead", "cacheWrite")
 DIMS = ("model", "effort", "ctx")
 EFFORTS = ("off", "minimal", "low", "medium", "high", "xhigh", "max", "unknown")
@@ -150,7 +155,8 @@ class Group:
         self.sessions = set()
         self.think = self.think_out = 0  # reasoning and output tokens of calls reporting reasoning
 
-    def add(self, u: dict, ctx: int, session: Path):
+    def add(self, u: dict, ctx: int, session: Path, miss: float):
+        self.sums["miss$"] += miss
         self.calls += 1
         self.sessions.add(session)
         if "reasoning" in u:
@@ -187,14 +193,25 @@ def main():
     seen, bad, groups, sources = set(), [], defaultdict(Group), Counter()
     total = Group()
     for f in mains + subs:
-        level_at = {}  # entry id -> thinking level in force at that entry, along the parent chain
+        # Both maps follow the parent chain, so a call sees the state of the branch it was made on.
+        level_at = {}   # entry id -> thinking level in force at that entry
+        cached_at = {}  # entry id -> cached prefix (cacheRead + cacheWrite) of the last main-model call
         for e in entries(f, bad):
+            eid, parent = e.get("id"), e.get("parentId")
             if e.get("type") == "thinking_level_change":
-                level_at[e.get("id")] = e.get("thinkingLevel")
-            elif e.get("parentId") in level_at:
-                level_at[e.get("id")] = level_at[e["parentId"]]
+                level_at[eid] = e.get("thinkingLevel")
+            elif parent in level_at:
+                level_at[eid] = level_at[parent]
             hit = usage_of(e)
-            if not hit or not hit[2]:
+            u = hit[2] if hit else None
+            prompt = sum((u or {}).get(k, 0) for k in ("input", "cacheRead", "cacheWrite"))
+            on_chain = bool(hit) and hit[0] != SIDE and prompt > 0  # side calls use other prefixes
+            cached_before = cached_at.get(parent)
+            if on_chain:
+                cached_at[eid] = u.get("cacheRead", 0) + u.get("cacheWrite", 0)
+            elif parent in cached_at:
+                cached_at[eid] = cached_at[parent]
+            if not u:
                 continue
             dedup = (e.get("id"), e.get("timestamp"))  # /fork and /clone copy entries verbatim
             if dedup in seen:
@@ -208,11 +225,20 @@ def main():
             else:
                 effort, src = "unknown", "unknown"
             sources[src] += 1
-            ctx = sum(u.get(k, 0) for k in ("input", "cacheRead", "cacheWrite"))
+            miss = 0.0
+            if on_chain and cached_before is not None:
+                # Tokens cached at the previous call but not read now were processed again.
+                # Measured on real logs this shortfall is either 0 or > 500 tokens, so no
+                # tolerance is needed. Priced at this call's average uncached-token price.
+                uncached = u.get("input", 0) + u.get("cacheWrite", 0)
+                missed = min(uncached, max(0, cached_before - u.get("cacheRead", 0)))
+                if missed:
+                    c = u.get("cost", {})
+                    miss = missed * (c.get("input", 0) + c.get("cacheWrite", 0)) / uncached
             key = {"model": model, "effort": effort,
-                   "ctx": bisect.bisect_right(a.ctx_edges, ctx)}
-            groups[tuple(key[d] for d in dims)].add(u, ctx, f)
-            total.add(u, ctx, f)
+                   "ctx": bisect.bisect_right(a.ctx_edges, prompt)}
+            groups[tuple(key[d] for d in dims)].add(u, prompt, f, miss)
+            total.add(u, prompt, f, miss)
 
     print(f"{len(mains)} main + {len(subs)} subagent session files, {total.calls} calls; "
           f"effort from message {sources['message']}, from history {sources['history']}, "
@@ -227,7 +253,7 @@ def main():
                 v.get("ctx", 0))
 
     hdr = dims + ["sessions", "calls", "calls/sess", "ctx_p50", "ctx_p90", "ctx_max", "total$", "$/call",
-                  "input$", "output$", "cacheRead$", "cacheWrite$", "total/out$", "think/out", "total$/Mout",
+                  "input$", "output$", "cacheRead$", "cacheWrite$", "miss$", "total/out$", "think/out", "total$/Mout",
                   "in_tok", "out_tok", "cacheRead_tok", "cacheWrite_tok"]
     out = [hdr]
 
@@ -242,7 +268,7 @@ def main():
                          f"{int(statistics.median(c))}" if c else "-",
                          f"{percentile(c, 0.9)}" if len(c) >= 10 else "-", f"{c[-1]}" if c else "-",
                          f"{r['total$']:.4f}", per_call]
-                + [f"{r[k]:.4f}" for k in ("input$", "output$", "cacheRead$", "cacheWrite$")]
+                + [f"{r[k]:.4f}" for k in ("input$", "output$", "cacheRead$", "cacheWrite$", "miss$")]
                 + [per_out, think, per_mout] + [f"{int(r[k + '_tok'])}" for k in PARTS])
 
     for k in sorted(groups, key=order):
