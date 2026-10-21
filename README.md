@@ -1,4 +1,4 @@
-# pi-spend
+# context-efficiency-metrics
 
 Shows what your [Pi](https://github.com/badlogic/pi-mono) sessions would cost at API prices.
 It reads the session logs in `~/.pi/agent/sessions` and groups the cost by model, thinking effort
@@ -7,7 +7,7 @@ and context size. It is one Python script without dependencies.
 ## Run with nix
 
 ```sh
-nix run github:OWNER/context-efficiency -- --since 7d --all-projects
+nix run github:fdietze/context-efficiency-metrics -- --since 7d --all-projects
 ```
 
 Pick the sessions with `--last N`, `--since 3d` or session files. Group with `--by`, for example
@@ -18,16 +18,16 @@ Set the context ranges with `--ctx-edges 50k,100k,200k`. `--help` shows the rest
 
 ```nix
 {
-  inputs.pi-spend.url = "github:OWNER/context-efficiency";
+  inputs.context-efficiency-metrics.url = "github:fdietze/context-efficiency-metrics";
 
   # then add it to your packages, e.g. in a NixOS config:
-  # environment.systemPackages = [ inputs.pi-spend.packages.${system}.default ];
+  # environment.systemPackages = [ inputs.context-efficiency-metrics.packages.${system}.default ];
 }
 ```
 
 ## Example output
 
-`pi-spend --since 7d --all-projects --by effort` (shortened, there are more columns for cost parts and tokens):
+`context-efficiency-metrics --since 7d --all-projects --by effort` (shortened, there are more columns for cost parts and tokens):
 
 ```
 33 main + 74 subagent session files, 16673 calls; effort from message 16667, from history 6, unknown 0

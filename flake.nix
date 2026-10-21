@@ -1,5 +1,5 @@
 {
-  description = "pi-spend: API-equivalent cost of Pi sessions by model, thinking effort and context size";
+  description = "context-efficiency-metrics: API-equivalent cost of Pi sessions by model, thinking effort and context size";
 
   inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
 
@@ -13,13 +13,13 @@
       # `nix run` starts meta.mainProgram of packages.default.
       packages = forAll (pkgs: {
         default = pkgs.stdenvNoCC.mkDerivation {
-          pname = "pi-spend";
+          pname = "context-efficiency-metrics";
           version = "0.1.0";
           dontUnpack = true;
           # python3 in buildInputs makes the fixup phase pin the script's shebang to the store.
           buildInputs = [ pkgs.python3 ];
-          installPhase = "install -Dm755 ${./pi-spend} $out/bin/pi-spend";
-          meta.mainProgram = "pi-spend";
+          installPhase = "install -Dm755 ${./context-efficiency-metrics} $out/bin/context-efficiency-metrics";
+          meta.mainProgram = "context-efficiency-metrics";
         };
       });
     };
