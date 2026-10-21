@@ -30,16 +30,22 @@ Set the context ranges with `--ctx-edges 50k,100k,200k`. `--help` shows the rest
 `context-efficiency-metrics --since 7d --all-projects --by effort` (shortened, there are more columns for cost parts and tokens):
 
 ```
-33 main + 74 subagent session files, 16673 calls; effort from message 16667, from history 6, unknown 0
-effort  calls  ctx_p50  ctx_p90  ctx_max  total$    $/call
-medium  4033   110431   255326   401259   227.0410  0.0563
-high    11780  110264   202044   777470   486.8957  0.0413
-xhigh   497    83586    183525   228405   15.9987   0.0322
-max     363    110741   180241   213238   1.7643    0.0049
-TOTAL   16673  109531   208452   777470   731.6997  0.0439
+29 main + 41 subagent session files, 14261 calls; effort from message 14255, from history 6, unknown 0
+effort  sessions  calls  calls/sess  ctx_p50  ctx_p90  total$    $/call  total/out$  think/out
+medium  15        3523   234.9       112196   271058   221.8163  0.0630  10.5        0.388
+high    63        10363  164.5       114026   209131   472.1766  0.0456  6.8         0.370
+xhigh   5         132    26.4        73868    179732   4.5663    0.0346  6.4         0.347
+max     2         243    121.5       112794   180241   1.4292    0.0059  18.5        0.652
+TOTAL   70        14261  203.7       113117   225343   699.9884  0.0491  7.7         0.377
 ```
 
-Context is what the model read in one call: input + cache read + cache write tokens.
-`ctx_p50`, `ctx_p90` and `ctx_max` are the median, the 90th percentile and the maximum over all calls.
-Effort comes from the call itself, otherwise from the last thinking level change on its branch,
-otherwise it is `unknown`.
+- `ctx`: what the model read in one call: input + cache read + cache write tokens.
+  `ctx_p50`, `ctx_p90`, `ctx_max` are median, 90th percentile and maximum.
+- `effort`: comes from the call itself, otherwise from the last thinking level change on its branch,
+  otherwise it is `unknown`.
+- `total/out$`: dollars spent per dollar of written output. 10 means 90% of the money went into
+  reading context. Lower is better.
+- `think/out`: share of output tokens that were thinking.
+- `sessions`: compare groups by this, not by `calls`. Calls in one session are not independent.
+
+`--help` has the exact definitions.

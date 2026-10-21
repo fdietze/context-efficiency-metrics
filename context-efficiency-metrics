@@ -15,6 +15,16 @@ Definitions
   ctx_p50/ctx_p90/ctx_max  median / nearest-rank 90th percentile / maximum context over
            calls with context > 0 (failed calls carry no usage). p90 is "-" for n < 10,
            where it would equal the maximum.
+  sessions   session files (main or subagent) with at least one call in the group.
+             Calls inside one session are correlated, so sessions, not calls, is the
+             better sample size when comparing groups.
+  calls/sess calls / sessions.
+  total/out$ total$ / output$: dollars spent per dollar of generated output. 1 means
+             all spend is output; 10 means 90% is spent (re-)reading context.
+             Lower is more context-efficient.
+  think/out  reasoning tokens / output tokens (providers count thinking as output),
+             over calls whose usage reports reasoning. "-" if none do. Some providers
+             report 0 instead of omitting the field, which biases this toward 0.
 """
 import argparse, bisect, json, math, os, re, statistics, sys, time
 from collections import Counter, defaultdict
@@ -137,9 +147,15 @@ class Group:
         self.sums = defaultdict(float)
         self.ctx = []
         self.calls = 0
+        self.sessions = set()
+        self.think = self.think_out = 0  # reasoning and output tokens of calls reporting reasoning
 
-    def add(self, u: dict, ctx: int):
+    def add(self, u: dict, ctx: int, session: Path):
         self.calls += 1
+        self.sessions.add(session)
+        if "reasoning" in u:
+            self.think += u["reasoning"]
+            self.think_out += u.get("output", 0)
         for k in PARTS:
             self.sums[k + "$"] += u.get("cost", {}).get(k, 0)
             self.sums[k + "_tok"] += u.get(k, 0)
@@ -195,8 +211,8 @@ def main():
             ctx = sum(u.get(k, 0) for k in ("input", "cacheRead", "cacheWrite"))
             key = {"model": model, "effort": effort,
                    "ctx": bisect.bisect_right(a.ctx_edges, ctx)}
-            groups[tuple(key[d] for d in dims)].add(u, ctx)
-            total.add(u, ctx)
+            groups[tuple(key[d] for d in dims)].add(u, ctx, f)
+            total.add(u, ctx, f)
 
     print(f"{len(mains)} main + {len(subs)} subagent session files, {total.calls} calls; "
           f"effort from message {sources['message']}, from history {sources['history']}, "
@@ -210,21 +226,24 @@ def main():
                 EFFORTS.index(v["effort"]) if v.get("effort") in EFFORTS else len(EFFORTS),
                 v.get("ctx", 0))
 
-    hdr = dims + ["calls", "ctx_p50", "ctx_p90", "ctx_max", "total$", "$/call", "input$", "output$",
-                  "cacheRead$", "cacheWrite$", "out_share", "total$/Mout",
+    hdr = dims + ["sessions", "calls", "calls/sess", "ctx_p50", "ctx_p90", "ctx_max", "total$", "$/call",
+                  "input$", "output$", "cacheRead$", "cacheWrite$", "total/out$", "think/out", "total$/Mout",
                   "in_tok", "out_tok", "cacheRead_tok", "cacheWrite_tok"]
     out = [hdr]
 
     def row(label: list[str], g: Group):
         r, c = g.sums, sorted(g.ctx)
-        share = r["output$"] / r["total$"] if r["total$"] else 0
+        per_out = f"{r['total$'] / r['output$']:.1f}" if r["output$"] else "-"
+        think = f"{g.think / g.think_out:.3f}" if g.think_out else "-"
         per_mout = f"{r['total$'] / r['output_tok'] * 1e6:.2f}" if r["output_tok"] else "-"
         per_call = f"{r['total$'] / g.calls:.4f}" if g.calls else "-"
-        return (label + [str(g.calls), f"{int(statistics.median(c))}" if c else "-",
+        n = len(g.sessions)
+        return (label + [str(n), str(g.calls), f"{g.calls / n:.1f}",
+                         f"{int(statistics.median(c))}" if c else "-",
                          f"{percentile(c, 0.9)}" if len(c) >= 10 else "-", f"{c[-1]}" if c else "-",
                          f"{r['total$']:.4f}", per_call]
                 + [f"{r[k]:.4f}" for k in ("input$", "output$", "cacheRead$", "cacheWrite$")]
-                + [f"{share:.3f}", per_mout] + [f"{int(r[k + '_tok'])}" for k in PARTS])
+                + [per_out, think, per_mout] + [f"{int(r[k + '_tok'])}" for k in PARTS])
 
     for k in sorted(groups, key=order):
         label = [ctx_label(a.ctx_edges, v) if d == "ctx" else str(v) for d, v in zip(dims, k)]
