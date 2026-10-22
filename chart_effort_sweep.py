@@ -1,5 +1,8 @@
 """Effort sweep: per model, cost per visible output and thinking per request at each effort.
 
+The cost excludes cache misses (miss_cost): how often the cache expired depends on how
+interactively an effort was used, not on the effort, and would swamp the effort effect.
+Misses have their own charts (chart_miss_vs_gap.py, chart_daily_spend.py).
 The low point of the cost line is the cheapest effort per visible token. The thinking row
 shows whether a higher effort actually made the model think more. Both rows share the
 y scale across models, so the chart also compares models.
@@ -15,11 +18,12 @@ from table import EFFORTS
 
 MIN_TREES = 10  # below this, the point is shown faded: too few independent sessions
 HIDE_BELOW = 3  # fewer trees give no usable interval (one tree: every draw is the same ratio)
-COST, THINK = "total$ per M visible output tokens", "thinking tokens per request"
+COST, THINK = "$ per M visible output tokens, without misses", "thinking tokens per request"
 
 HELP = ("One column per model, thinking effort rising to the right. Top: dollars per million "
-        "tokens of visible answer (output without thinking); the lowest point is the cheapest "
-        "effort. Bottom: average thinking tokens per request, to see whether a higher effort "
+        "tokens of visible answer (output without thinking), counting cache misses as if the "
+        "cache had held, because misses depend on your pauses, not on the effort; the lowest "
+        "point is the cheapest effort. Bottom: average thinking tokens per request, to see whether a higher effort "
         "really thinks more. Dot: typical value; line: the range it plausibly lies in given the "
         "number of sessions; overlapping ranges mean no clear difference. Faded: fewer than "
         f"{MIN_TREES} sessions; efforts with fewer than {HIDE_BELOW} are hidden. Caveats: you "
@@ -34,7 +38,7 @@ def effort_sweep_data(calls: list[Call]) -> list[dict]:
         if c.kind != "assistant" or c.reasoning is None:
             continue
         u = per[(c.model, c.effort)][c.tree]
-        u[0] += c.cost["total"]
+        u[0] += c.cost["total"] - c.miss_cost
         u[1] += c.tokens["output"] - c.reasoning
         u[2] += c.reasoning
         u[3] += 1
