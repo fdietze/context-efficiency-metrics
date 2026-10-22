@@ -14,6 +14,12 @@ EDGES = (30, 60, 120, 240, 300, 360, 600, 1800, 3600, 7200, 86400)
 TTL_RULES = (300, 3600)
 MIN_CALLS = 20  # smaller bins are mostly noise (one miss in 3 calls reads as 33%)
 
+HELP = ("How likely the cache was gone, given how long the session was idle before a call. "
+        "A miss means the whole prompt is paid again at the full price. A jump at a dashed line "
+        "means a fixed expiry time: pauses shorter than it are cheap, longer ones are expensive. "
+        "A slow rise means the provider evicts gradually. Cache warming helps where there is a "
+        "jump, if it pings before the line.")
+
 
 def _label(i: int) -> str:
     def h(s):

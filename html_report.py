@@ -8,10 +8,7 @@ import html, json
 from datetime import datetime
 
 from calls import Call
-from chart_ctx_spend import ctx_spend_data, ctx_spend_spec
-from chart_daily_spend import daily_spend_data, daily_spend_spec
-from chart_forest import forest_data, forest_spec
-from chart_miss_vs_gap import miss_vs_gap_data, miss_vs_gap_spec
+import chart_ctx_spend, chart_daily_spend, chart_forest, chart_miss_vs_gap
 
 SCRIPTS = (
     ("https://cdn.jsdelivr.net/npm/vega@6.4.0/build/vega.min.js",
@@ -29,22 +26,27 @@ def _json(spec: dict) -> str:
 
 
 def render_html(calls: list[Call], table: str, cutoff: float | None) -> str:
-    specs = [
-        daily_spend_spec(daily_spend_data(calls, cutoff)),
-        forest_spec(forest_data(calls)),
-        miss_vs_gap_spec(miss_vs_gap_data(calls)),
-        ctx_spend_spec(ctx_spend_data(calls)),
+    charts = [  # (Vega-Lite spec, how-to-read text shown under the chart)
+        (chart_daily_spend.daily_spend_spec(chart_daily_spend.daily_spend_data(calls, cutoff)),
+         chart_daily_spend.HELP),
+        (chart_forest.forest_spec(chart_forest.forest_data(calls)), chart_forest.HELP),
+        (chart_miss_vs_gap.miss_vs_gap_spec(chart_miss_vs_gap.miss_vs_gap_data(calls)),
+         chart_miss_vs_gap.HELP),
+        (chart_ctx_spend.ctx_spend_spec(chart_ctx_spend.ctx_spend_data(calls)), chart_ctx_spend.HELP),
     ]
+    specs = [s for s, _ in charts]
     scripts = "\n".join(f'<script src="{u}" integrity="{h}" crossorigin="anonymous"></script>'
                         for u, h in SCRIPTS)
-    divs = "\n".join(f'<div id="chart{i}" class="chart"></div>' for i in range(len(specs)))
+    divs = "\n".join(f'<div id="chart{i}" class="chart"></div>\n<p class="help">{html.escape(h)}</p>'
+                     for i, (_, h) in enumerate(charts))
     created = datetime.now().strftime("%Y-%m-%d %H:%M")
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <title>context-efficiency-metrics</title>
 <style>
 body {{ font-family: system-ui, sans-serif; margin: 2em; color: #222; }}
-.chart {{ margin: 2em 0; }}
+.chart {{ margin: 2em 0 0.5em; }}
+.help {{ max-width: 46em; color: #555; margin: 0 0 3em; }}
 pre {{ font-size: 12px; overflow-x: auto; }}
 #fallback {{ color: #b00; }}
 </style>

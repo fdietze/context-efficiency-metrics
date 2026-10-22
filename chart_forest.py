@@ -12,6 +12,13 @@ from calls import Call
 MIN_TREES = 10  # below this, the interval is shown faded: too few independent sessions
 HIDE_BELOW = 3  # fewer trees give no usable interval (one tree: every draw is the same ratio)
 
+HELP = ("Each row is a model at one thinking effort; further left is cheaper per token of visible "
+        "answer (output without thinking). The dot is the typical value, the line the range it "
+        "plausibly lies in given how many sessions there are. Overlapping lines: no clear "
+        "difference. A short line means much data, not that the model is better. The groups did "
+        "different tasks, so a gap can come from the work, not the model. Log scale: one grid "
+        "step further right is several times more expensive.")
+
 
 def forest_data(calls: list[Call]) -> list[dict]:
     # Pre-aggregate (num, den) per (group, tree) so each bootstrap draw is O(trees).

@@ -6,6 +6,11 @@ from calls import Call
 
 TOP_MODELS = 7  # more stacked colors become indistinguishable; the rest is "other"
 
+HELP = ("Bars: what each day cost. The dashed line is the part of it that bought nothing: "
+        "prompt tokens processed again after the cache expired, plus cache-warm pings. "
+        "The closer the line is to the top of the bar, the more of that day was waste. "
+        "Days before --since are left out because only part of their sessions was read.")
+
 
 def daily_spend_data(calls: list[Call], cutoff: float | None) -> list[dict]:
     """Per local day: spend per model, and waste$ under model "waste". Days before

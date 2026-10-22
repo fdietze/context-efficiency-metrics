@@ -10,6 +10,11 @@ from calls import Call
 MIN_SHARE = 0.01  # models below this share of total spend are left out to keep the chart readable
 POINTS = 200      # curve points per model; the embedded data stays small
 
+HELP = ("Read it as: y% of this model's spend went to calls with at most x tokens of context. "
+        "A curve that rises late (to the right) means most money goes to long contexts; "
+        "compacting or starting fresh sessions earlier cuts cost there. Where the curve reaches "
+        "50% is the context size at which half the money was spent.")
+
 
 def ctx_spend_data(calls: list[Call]) -> list[dict]:
     per = defaultdict(list)
