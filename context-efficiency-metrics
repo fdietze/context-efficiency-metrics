@@ -29,6 +29,9 @@ Definitions
   think/out  reasoning tokens / output tokens (providers count thinking as output),
              over calls whose usage reports reasoning. "-" if none do. Some providers
              report 0 instead of omitting the field, which biases this toward 0.
+  total$/Mvis total$ per million visible output tokens (output - reasoning), over the
+             same calls as think/out. Unlike total$/Mout it does not drop when more
+             thinking inflates the output count. Biased low by the same 0-reports.
 """
 import argparse, bisect, json, math, os, re, statistics, sys, time
 from collections import Counter, defaultdict
@@ -153,7 +156,8 @@ class Group:
         self.ctx = []
         self.calls = 0
         self.sessions = set()
-        self.think = self.think_out = 0  # reasoning and output tokens of calls reporting reasoning
+        # Calls whose usage reports reasoning: their reasoning, output and total cost.
+        self.think = self.think_out = self.think_cost = 0
 
     def add(self, u: dict, ctx: int, session: Path, miss: float):
         self.sums["miss$"] += miss
@@ -162,6 +166,7 @@ class Group:
         if "reasoning" in u:
             self.think += u["reasoning"]
             self.think_out += u.get("output", 0)
+            self.think_cost += u.get("cost", {}).get("total", 0)
         for k in PARTS:
             self.sums[k + "$"] += u.get("cost", {}).get(k, 0)
             self.sums[k + "_tok"] += u.get(k, 0)
@@ -253,7 +258,7 @@ def main():
                 v.get("ctx", 0))
 
     hdr = dims + ["sessions", "calls", "calls/sess", "ctx_p50", "ctx_p90", "ctx_max", "total$", "$/call",
-                  "input$", "output$", "cacheRead$", "cacheWrite$", "miss$", "total/out$", "think/out", "total$/Mout",
+                  "input$", "output$", "cacheRead$", "cacheWrite$", "miss$", "total/out$", "think/out", "total$/Mout", "total$/Mvis",
                   "in_tok", "out_tok", "cacheRead_tok", "cacheWrite_tok"]
     out = [hdr]
 
@@ -262,6 +267,9 @@ def main():
         per_out = f"{r['total$'] / r['output$']:.1f}" if r["output$"] else "-"
         think = f"{g.think / g.think_out:.3f}" if g.think_out else "-"
         per_mout = f"{r['total$'] / r['output_tok'] * 1e6:.2f}" if r["output_tok"] else "-"
+        # Some providers report reasoning > output; the clamp keeps visible tokens >= 0.
+        visible = max(0, g.think_out - g.think)
+        per_mvis = f"{g.think_cost / visible * 1e6:.2f}" if visible else "-"
         per_call = f"{r['total$'] / g.calls:.4f}" if g.calls else "-"
         n = len(g.sessions)
         return (label + [str(n), str(g.calls), f"{g.calls / n:.1f}",
@@ -269,7 +277,7 @@ def main():
                          f"{percentile(c, 0.9)}" if len(c) >= 10 else "-", f"{c[-1]}" if c else "-",
                          f"{r['total$']:.4f}", per_call]
                 + [f"{r[k]:.4f}" for k in ("input$", "output$", "cacheRead$", "cacheWrite$", "miss$")]
-                + [per_out, think, per_mout] + [f"{int(r[k + '_tok'])}" for k in PARTS])
+                + [per_out, think, per_mout, per_mvis] + [f"{int(r[k + '_tok'])}" for k in PARTS])
 
     for k in sorted(groups, key=order):
         label = [ctx_label(a.ctx_edges, v) if d == "ctx" else str(v) for d, v in zip(dims, k)]

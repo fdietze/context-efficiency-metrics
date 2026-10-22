@@ -49,6 +49,8 @@ TOTAL   71        14431  203.3       112612   223863   708.1920  178.4995  0.049
   processed again, e.g. because the cache expired during a pause. Turn on Pi's `cacheWarming`
   or `PI_CACHE_RETENTION=long` to lower it.
 - `think/out`: share of output tokens that were thinking.
+- `total$/Mvis`: dollars per million visible output tokens (output without thinking).
+  More thinking makes `total$/Mout` look better while you pay more; this one does not.
 - `sessions`: compare groups by this, not by `calls`. Calls in one session are not independent.
 
 `--help` has the exact definitions.
