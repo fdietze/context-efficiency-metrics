@@ -1,2 +1,3 @@
 .corral/
 .worktrees/
+__pycache__/

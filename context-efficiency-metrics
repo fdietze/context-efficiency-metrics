@@ -36,148 +36,12 @@ Definitions
              same calls as think/out. Unlike total$/Mout it does not drop when more
              thinking inflates the output count. Biased low by the same 0-reports.
 """
-import argparse, bisect, json, math, os, re, statistics, sys, time
-from collections import Counter, defaultdict
-from pathlib import Path
+import argparse, os, sys
 
-ROOT = Path.home() / ".pi/agent/sessions"
-SIDE = "Tools/summaries"  # side LLM calls (tool summaries, compaction), not the main chain
-PARTS = ("input", "output", "cacheRead", "cacheWrite")
-DIMS = ("model", "effort", "ctx")
-# What it costs, how much is waste, how efficient, why (context, thinking), how much evidence.
-DEFAULT_COLUMNS = ("total$", "miss%", "total$/Mvis", "ctx_p50", "think/out", "sessions", "calls")
-EFFORTS = ("off", "minimal", "low", "medium", "high", "xhigh", "max", "unknown")
-
-
-def tokens(s: str) -> int:
-    m = re.fullmatch(r"(\d+)([kKmM]?)", s)
-    if not m:
-        raise argparse.ArgumentTypeError("use e.g. 50k, 200000, 1m")
-    return int(m[1]) * {"": 1, "k": 1000, "m": 1000000}[m[2].lower()]
-
-
-def ctx_edges(s: str) -> list[int]:
-    edges = [tokens(x) for x in s.split(",")]
-    if edges != sorted(set(edges)) or edges[0] <= 0:
-        raise argparse.ArgumentTypeError("edges must be positive and strictly increasing")
-    return edges
-
-
-def human(n: int) -> str:
-    return f"{n // 1000000}m" if n % 1000000 == 0 else f"{n // 1000}k" if n % 1000 == 0 else str(n)
-
-
-def ctx_label(edges: list[int], i: int) -> str:
-    """Bin i is [edges[i-1], edges[i]); the first starts at 0, the last is open-ended."""
-    if i == 0:
-        return f"<{human(edges[0])}"
-    if i == len(edges):
-        return f">={human(edges[-1])}"
-    return f"{human(edges[i - 1])}-{human(edges[i])}"
-
-
-def project_dir(cwd: str) -> Path:
-    return ROOT / ("--" + cwd.strip("/").replace("/", "-") + "--")
-
-
-def duration(s: str) -> float:
-    m = re.fullmatch(r"(\d+(?:\.\d+)?)([mhdw])", s)
-    if not m:
-        raise argparse.ArgumentTypeError("use e.g. 90m, 12h, 3d, 2w")
-    return float(m[1]) * {"m": 60, "h": 3600, "d": 86400, "w": 604800}[m[2]]
-
-
-def select_main(a) -> list[Path]:
-    if a.files:
-        return [Path(f) for f in a.files]
-    if a.last is None and a.since is None:
-        env = os.environ.get("PI_SESSION_FILE")
-        if not env:
-            sys.exit("pass session files, --last N or --since D (or run inside Pi)")
-        return [Path(env)]
-    dirs = [d for d in ROOT.iterdir() if d.is_dir()] if a.all_projects else [project_dir(a.cwd)]
-    files = sorted((f for d in dirs for f in d.glob("*.jsonl")), key=lambda f: f.stat().st_mtime, reverse=True)
-    if a.since is not None:
-        cutoff = time.time() - a.since
-        files = [f for f in files if f.stat().st_mtime >= cutoff]
-    return files[: a.last] if a.last is not None else files
-
-
-def entries(path: Path, bad: list):
-    """Yield parsed JSONL entries. A line torn by a failed write (e.g. disk full) is
-    lost, but Pi's next entry may be glued to its tail: recover it by retrying from each
-    later '{"type":"'. Lines with nothing recoverable are recorded in `bad`."""
-    with path.open(errors="replace") as fh:
-        for n, line in enumerate(fh, 1):
-            try:
-                yield json.loads(line)
-                continue
-            except json.JSONDecodeError:
-                pass
-            for m in re.finditer(r'\{"type":"', line):
-                if m.start() == 0:
-                    continue
-                try:
-                    e = json.loads(line[m.start():])
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(e, dict) and "id" in e:  # skips nested {"type":"text"} blocks
-                    yield e
-                    break
-            else:
-                bad.append((path, n))
-                continue
-            bad.append((path, n))  # the torn head of this line is still lost
-
-
-def subagent_files(main: Path) -> list[Path]:
-    sid = next((e.get("id", "") for e in entries(main, []) ), "")
-    return sorted((main.parent / "subagents" / sid).glob("*.jsonl")) if sid else []
-
-
-def usage_of(e: dict):
-    """(model key, own effort or None, usage) for entries Pi counts toward session totals."""
-    t, m = e.get("type"), e.get("message") or {}
-    if t == "message" and m.get("role") == "assistant":
-        own = m.get("thinkingLevel") or m.get("providerThinkingLevel")
-        return f"{m.get('provider')}/{m.get('responseModel') or m.get('model')}", own, m.get("usage")
-    if t == "usage":
-        return f"{e.get('provider')}/{e.get('model')}", None, e.get("usage")
-    if t == "message" and m.get("role") == "toolResult" and m.get("usage"):
-        return "Tools/summaries", None, m["usage"]
-    if t in ("branch_summary", "compaction") and e.get("usage"):
-        return "Tools/summaries", None, e["usage"]
-    return None
-
-
-def percentile(xs: list[int], q: float) -> int:
-    """Nearest-rank percentile of a sorted list."""
-    return xs[max(math.ceil(q * len(xs)) - 1, 0)]
-
-
-class Group:
-    def __init__(self):
-        self.sums = defaultdict(float)
-        self.ctx = []
-        self.calls = 0
-        self.sessions = set()
-        # Calls whose usage reports reasoning: their reasoning, output and total cost.
-        self.think = self.think_out = self.think_cost = 0
-
-    def add(self, u: dict, ctx: int, session: Path, miss: float):
-        self.sums["miss$"] += miss
-        self.calls += 1
-        self.sessions.add(session)
-        if "reasoning" in u:
-            self.think += u["reasoning"]
-            self.think_out += u.get("output", 0)
-            self.think_cost += u.get("cost", {}).get("total", 0)
-        for k in PARTS:
-            self.sums[k + "$"] += u.get("cost", {}).get(k, 0)
-            self.sums[k + "_tok"] += u.get(k, 0)
-        self.sums["total$"] += u.get("cost", {}).get("total", 0)
-        if ctx > 0:
-            self.ctx.append(ctx)
+from calls import read_calls
+from ctx_ranges import ctx_edges
+from session_selection import duration, select_main, subagent_files
+from table import DIMS, render_table
 
 
 def main():
@@ -200,108 +64,16 @@ def main():
     dims = [d for d in DIMS if d in by]  # fixed column order
 
     mains = select_main(a)
-    subs = [] if a.no_subagents else [s for f in mains for s in subagent_files(f)]
-    seen, bad, groups, sources = set(), [], defaultdict(Group), Counter()
-    total = Group()
-    for f in mains + subs:
-        # Both maps follow the parent chain, so a call sees the state of the branch it was made on.
-        level_at = {}   # entry id -> thinking level in force at that entry
-        cached_at = {}  # entry id -> cached prefix (cacheRead + cacheWrite) of the last main-model call
-        for e in entries(f, bad):
-            eid, parent = e.get("id"), e.get("parentId")
-            if e.get("type") == "thinking_level_change":
-                level_at[eid] = e.get("thinkingLevel")
-            elif parent in level_at:
-                level_at[eid] = level_at[parent]
-            hit = usage_of(e)
-            u = hit[2] if hit else None
-            prompt = sum((u or {}).get(k, 0) for k in ("input", "cacheRead", "cacheWrite"))
-            on_chain = bool(hit) and hit[0] != SIDE and prompt > 0  # side calls use other prefixes
-            cached_before = cached_at.get(parent)
-            if on_chain:
-                cached_at[eid] = u.get("cacheRead", 0) + u.get("cacheWrite", 0)
-            elif parent in cached_at:
-                cached_at[eid] = cached_at[parent]
-            if not u:
-                continue
-            dedup = (e.get("id"), e.get("timestamp"))  # /fork and /clone copy entries verbatim
-            if dedup in seen:
-                continue
-            seen.add(dedup)
-            model, own, u = hit
-            if own:
-                effort, src = own, "message"
-            elif e.get("parentId") in level_at and level_at[e["parentId"]]:
-                effort, src = level_at[e["parentId"]], "history"
-            else:
-                effort, src = "unknown", "unknown"
-            sources[src] += 1
-            miss = 0.0
-            if on_chain and cached_before is not None:
-                # Tokens cached at the previous call but not read now were processed again.
-                # Measured on real logs this shortfall is either 0 or > 500 tokens, so no
-                # tolerance is needed. Priced at this call's average uncached-token price.
-                uncached = u.get("input", 0) + u.get("cacheWrite", 0)
-                missed = min(uncached, max(0, cached_before - u.get("cacheRead", 0)))
-                if missed:
-                    c = u.get("cost", {})
-                    miss = missed * (c.get("input", 0) + c.get("cacheWrite", 0)) / uncached
-            key = {"model": model, "effort": effort,
-                   "ctx": bisect.bisect_right(a.ctx_edges, prompt)}
-            groups[tuple(key[d] for d in dims)].add(u, prompt, f, miss)
-            total.add(u, prompt, f, miss)
-
-    print(f"{len(mains)} main + {len(subs)} subagent session files, {total.calls} calls; "
-          f"effort from message {sources['message']}, from history {sources['history']}, "
-          f"unknown {sources['unknown']}", file=sys.stderr)
-    if bad:
-        print(f"{len(bad)} torn lines (entry lost, glued successor recovered where possible) in {len({f for f, _ in bad})} files (cost under-counted)", file=sys.stderr)
-
-    def order(k):  # sort by model name, then effort low to high, then context range
-        v = dict(zip(dims, k))
-        return (str(v.get("model", "")),
-                EFFORTS.index(v["effort"]) if v.get("effort") in EFFORTS else len(EFFORTS),
-                v.get("ctx", 0))
-
-    def metrics(g: Group) -> dict[str, str]:
-        r, c = g.sums, sorted(g.ctx)
-        # Some providers report reasoning > output; the clamp keeps visible tokens >= 0.
-        visible = max(0, g.think_out - g.think)
-        n = len(g.sessions)
-        return {
-            "total$": f"{r['total$']:.4f}",
-            "miss%": f"{r['miss$'] / r['total$'] * 100:.1f}" if r["total$"] else "-",
-            "total$/Mvis": f"{g.think_cost / visible * 1e6:.2f}" if visible else "-",
-            "ctx_p50": f"{int(statistics.median(c))}" if c else "-",
-            "think/out": f"{g.think / g.think_out:.3f}" if g.think_out else "-",
-            "sessions": str(n),
-            "calls": str(g.calls),
-            "calls/sess": f"{g.calls / n:.1f}",
-            "ctx_p90": f"{percentile(c, 0.9)}" if len(c) >= 10 else "-",
-            "ctx_max": f"{c[-1]}" if c else "-",
-            "$/call": f"{r['total$'] / g.calls:.4f}",
-            **{k: f"{r[k]:.4f}" for k in ("input$", "output$", "cacheRead$", "cacheWrite$", "miss$")},
-            "total/out$": f"{r['total$'] / r['output$']:.1f}" if r["output$"] else "-",
-            "total$/Mout": f"{r['total$'] / r['output_tok'] * 1e6:.2f}" if r["output_tok"] else "-",
-            **{k + "_tok": f"{int(r[k + '_tok'])}" for k in PARTS},
-        }
-
-    # Insertion order of metrics() is the --wide column order; DEFAULT_COLUMNS is its prefix.
-    cols = list(metrics(total)) if a.wide else list(DEFAULT_COLUMNS)
-    hdr = dims + cols
-    out = [hdr]
-
-    def row(label: list[str], g: Group):
-        m = metrics(g)
-        return label + [m[c] for c in cols]
-
-    for k in sorted(groups, key=order):
-        label = [ctx_label(a.ctx_edges, v) if d == "ctx" else str(v) for d, v in zip(dims, k)]
-        out.append(row(label, groups[k]))
-    out.append(row(["TOTAL"] + [""] * (len(dims) - 1), total))
-    w = [max(len(r[i]) for r in out) for i in range(len(hdr))]
-    for r in out:
-        print("  ".join(c.ljust(w[i]) for i, c in enumerate(r)).rstrip())
+    subs = [] if a.no_subagents else [(s, f) for f in mains for s in subagent_files(f)]
+    calls, stats = read_calls([(f, f) for f in mains] + subs)
+    src = stats.effort_sources
+    print(f"{len(mains)} main + {len(subs)} subagent session files, {len(calls)} calls; "
+          f"effort from message {src['message']}, from history {src['history']}, "
+          f"unknown {src['unknown']}", file=sys.stderr)
+    if stats.torn:
+        print(f"{len(stats.torn)} torn lines (entry lost, glued successor recovered where possible) "
+              f"in {len({f for f, _ in stats.torn})} files (cost under-counted)", file=sys.stderr)
+    print(render_table(calls, dims, a.ctx_edges, a.wide))
 
 
 if __name__ == "__main__":
