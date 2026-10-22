@@ -10,6 +10,7 @@ from bayesian_bootstrap import ratio_interval
 from calls import Call
 
 MIN_TREES = 10  # below this, the interval is shown faded: too few independent sessions
+HIDE_BELOW = 3  # fewer trees give no usable interval (one tree: every draw is the same ratio)
 
 
 def forest_data(calls: list[Call]) -> list[dict]:
@@ -26,7 +27,7 @@ def forest_data(calls: list[Call]) -> list[dict]:
         # Some providers report reasoning > output; clamp like table.py does per group.
         units = [(n, max(0.0, d)) for n, d in trees.values()]
         q = ratio_interval(units)
-        if q is None:
+        if q is None or len(trees) < HIDE_BELOW:
             continue
         rows.append({"group": f"{model} @ {effort}", "model": model, "effort": effort,
                      "lo": q[0] * 1e6, "mid": q[1] * 1e6, "hi": q[2] * 1e6,
@@ -35,13 +36,14 @@ def forest_data(calls: list[Call]) -> list[dict]:
 
 
 def forest_spec(rows: list[dict]) -> dict:
-    enc_y = {"field": "group", "type": "nominal", "sort": None, "title": None}
+    enc_y = {"field": "group", "type": "nominal", "sort": None, "title": None,
+             "axis": {"labelLimit": 0}}
     opacity = {"condition": {"test": "datum.few", "value": 0.35}, "value": 1}
     x = {"type": "quantitative", "scale": {"type": "log"}, "title": "total$ per M visible output tokens"}
     return {
         "title": {"text": "Cost per visible output (median, 90% interval over session trees)",
-                  "subtitle": f"Assistant calls reporting reasoning. Faded: fewer than {MIN_TREES} "
-                              "session trees. Observational: groups differ in task mix."},
+                  "subtitle": f"Assistant calls reporting reasoning. Faded: fewer than {MIN_TREES} session trees; "
+                              f"hidden: fewer than {HIDE_BELOW}. Observational: groups differ in task mix."},
         "data": {"values": rows},
         "height": {"step": 22},
         "width": 640,
@@ -49,7 +51,7 @@ def forest_spec(rows: list[dict]) -> dict:
         "layer": [
             {"mark": "rule", "encoding": {"x": {"field": "lo", **x}, "x2": {"field": "hi"}}},
             {"mark": {"type": "point", "filled": True, "size": 60},
-             "encoding": {"x": {"field": "mid", **x}, "color": {"field": "model", "legend": None},
+             "encoding": {"x": {"field": "mid", **x},
                           "tooltip": [{"field": "group"}, {"field": "mid", "format": ".1f", "title": "median"},
                                       {"field": "lo", "format": ".1f", "title": "5%"},
                                       {"field": "hi", "format": ".1f", "title": "95%"},

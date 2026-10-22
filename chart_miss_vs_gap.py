@@ -12,6 +12,7 @@ from calls import Call
 # Bin edges in seconds, finer around the 5-minute and 1-hour TTLs.
 EDGES = (30, 60, 120, 240, 300, 360, 600, 1800, 3600, 7200, 86400)
 TTL_RULES = (300, 3600)
+MIN_CALLS = 20  # smaller bins are mostly noise (one miss in 3 calls reads as 33%)
 
 
 def _label(i: int) -> str:
@@ -33,6 +34,8 @@ def miss_vs_gap_data(calls: list[Call]) -> list[dict]:
         miss[key] += c.miss_cost > 0
     rows = []
     for (provider, i), k in sorted(n.items()):
+        if k < MIN_CALLS:
+            continue
         lo = EDGES[i - 1] if i else 1  # log axis: plot the first bin from 1 s
         hi = EDGES[i] if i < len(EDGES) else EDGES[-1] * 7
         rows.append({"provider": provider, "bin": _label(i), "lo": lo, "hi": hi,
@@ -45,7 +48,7 @@ def miss_vs_gap_spec(rows: list[dict]) -> dict:
     return {
         "title": {"text": "Cache-miss probability vs pause",
                   "subtitle": "One panel per provider. Rules at 5 min and 1 h (Anthropic cache TTLs). "
-                              "Point size: calls in the bin."},
+                              f"Point size: calls in the bin; bins under {MIN_CALLS} calls omitted."},
         "data": {"values": rows},
         "facet": {"row": {"field": "provider", "type": "nominal", "title": None}},
         "spec": {

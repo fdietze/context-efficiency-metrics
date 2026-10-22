@@ -44,7 +44,7 @@ def ctx_spend_spec(rows: list[dict]) -> dict:
             "x": {"field": "ctx", "type": "quantitative", "title": "context tokens"},
             "y": {"field": "share", "type": "quantitative", "title": "share of spend",
                   "axis": {"format": "%"}},
-            "color": {"field": "model", "type": "nominal"},
+            "color": {"field": "model", "type": "nominal", "legend": {"labelLimit": 0}},
             "tooltip": [{"field": "model"}, {"field": "ctx", "format": ","},
                         {"field": "share", "format": ".1%"}],
         },
