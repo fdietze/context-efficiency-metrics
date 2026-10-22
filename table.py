@@ -5,7 +5,8 @@ from collections import defaultdict
 from calls import PARTS, Call
 from ctx_ranges import ctx_label
 
-DIMS = ("model", "effort", "ctx")
+DIMS = ("kind", "model", "effort", "ctx")
+KINDS = ("assistant", "cache_warm", "side")
 # What it costs, how much is waste, how efficient, why (context, thinking), how much evidence.
 DEFAULT_COLUMNS = ("total$", "miss%", "total$/Mvis", "ctx_p50", "think/out", "sessions", "calls")
 EFFORTS = ("off", "minimal", "low", "medium", "high", "xhigh", "max", "unknown")
@@ -68,14 +69,17 @@ class Group:
 def render_table(calls: list[Call], dims: list[str], edges: list[int], wide: bool) -> str:
     groups, total = defaultdict(Group), Group()
     for c in calls:
-        key = {"model": c.model, "effort": c.effort, "ctx": bisect.bisect_right(edges, c.ctx)}
+        key = {"kind": c.kind, "model": c.model, "effort": c.effort, "ctx": bisect.bisect_right(edges, c.ctx)}
         groups[tuple(key[d] for d in dims)].add(c)
         total.add(c)
 
-    def order(k):  # sort by model name, then effort low to high, then context range
+    def rank(seq, v):  # known values in their natural order, unknown ones last
+        return seq.index(v) if v in seq else len(seq)
+
+    def order(k):  # sort by kind, model name, effort low to high, context range
         v = dict(zip(dims, k))
-        return (str(v.get("model", "")),
-                EFFORTS.index(v["effort"]) if v.get("effort") in EFFORTS else len(EFFORTS),
+        return (rank(KINDS, v.get("kind")), str(v.get("kind", "")), str(v.get("model", "")),
+                rank(EFFORTS, v.get("effort")),
                 v.get("ctx", 0))
 
     cols = list(total.metrics()) if wide else list(DEFAULT_COLUMNS)

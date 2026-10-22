@@ -4,10 +4,14 @@
 Selects main sessions (explicit files, --last N, --since 3d, default: $PI_SESSION_FILE),
 adds their actor-subagent sessions (<session dir>/subagents/<session id>/*.jsonl) unless
 --no-subagents, de-duplicates entries copied by /fork or /clone, and sums usage the way
-Pi's /session does (tool/summary usage is keyed "Tools/summaries").
+Pi's /session does.
 
 Definitions
   call     one usage record: an assistant message, or a usage/summary entry.
+  kind     what the call was for: assistant (a model turn), cache_warm (Pi's keep-alive
+           ping that refreshes the prompt cache during pauses), side (tool summaries,
+           compaction; their model is not logged, shown as "-"). Grouping by kind keeps
+           cheap pings from distorting calls, ctx and per-output metrics of real turns.
   context  tokens the model read in one call = input + cacheRead + cacheWrite.
   effort   thinking level of the call: the level stored on the message if present,
            else the latest thinking_level_change on the entry's parent chain
@@ -52,8 +56,8 @@ def main():
     p.add_argument("--all-projects", action="store_true", help="all cwds, not just --cwd")
     p.add_argument("--cwd", default=os.getcwd(), help="project whose sessions to scan (default: $PWD)")
     p.add_argument("--no-subagents", action="store_true", help="exclude actor-subagent sessions")
-    p.add_argument("--by", default="model,effort", metavar="DIMS",
-                   help="comma list of grouping dimensions: model, effort, ctx (default: model,effort)")
+    p.add_argument("--by", default="kind,model,effort", metavar="DIMS",
+                   help="comma list of grouping dimensions: kind, model, effort, ctx (default: kind,model,effort)")
     p.add_argument("--ctx-edges", type=ctx_edges, default=ctx_edges("50k,100k,200k,400k"), metavar="E",
                    help="context range boundaries for --by ctx (default: 50k,100k,200k,400k)")
     p.add_argument("--wide", action="store_true", help="show all columns, not just the default ones")

@@ -11,7 +11,8 @@ from pathlib import Path
 from jsonl_entries import entries
 
 PARTS = ("input", "output", "cacheRead", "cacheWrite")
-SIDE_MODEL = "Tools/summaries"  # side calls (tool summaries, compaction) as keyed by Pi's /session
+# Side calls (tool summaries, compaction) do not log their model; kind="side" identifies them.
+SIDE_MODEL = "-"
 
 
 @dataclass(frozen=True, slots=True)
