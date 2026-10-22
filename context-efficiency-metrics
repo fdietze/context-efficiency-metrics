@@ -40,11 +40,13 @@ Definitions
              same calls as think/out. Unlike total$/Mout it does not drop when more
              thinking inflates the output count. Biased low by the same 0-reports.
 """
-import argparse, os, sys
+import argparse, os, sys, time
+from pathlib import Path
 
 from calls import read_calls
 from ctx_ranges import ctx_edges
 from session_selection import duration, select_main, subagent_files
+from html_report import render_html
 from table import DIMS, render_table
 
 
@@ -61,6 +63,8 @@ def main():
     p.add_argument("--ctx-edges", type=ctx_edges, default=ctx_edges("50k,100k,200k,400k"), metavar="E",
                    help="context range boundaries for --by ctx (default: 50k,100k,200k,400k)")
     p.add_argument("--wide", action="store_true", help="show all columns, not just the default ones")
+    p.add_argument("--html", type=Path, metavar="FILE",
+                   help="also write charts and the table to FILE (loads pinned, hash-checked Vega from a CDN)")
     a = p.parse_args()
     by = [d.strip() for d in a.by.split(",") if d.strip()]
     if not set(by) <= set(DIMS):
@@ -77,7 +81,12 @@ def main():
     if stats.torn:
         print(f"{len(stats.torn)} torn lines (entry lost, glued successor recovered where possible) "
               f"in {len({f for f, _ in stats.torn})} files (cost under-counted)", file=sys.stderr)
-    print(render_table(calls, dims, a.ctx_edges, a.wide))
+    table = render_table(calls, dims, a.ctx_edges, a.wide)
+    print(table)
+    if a.html:
+        cutoff = time.time() - a.since if a.since is not None else None
+        a.html.write_text(render_html(calls, table, cutoff))
+        print(f"wrote {a.html}", file=sys.stderr)
 
 
 if __name__ == "__main__":
