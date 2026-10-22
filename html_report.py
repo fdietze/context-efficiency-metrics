@@ -8,7 +8,7 @@ import html, json
 from datetime import datetime
 
 from calls import Call
-import chart_ctx_spend, chart_daily_spend, chart_forest, chart_miss_vs_gap
+import chart_ctx_spend, chart_daily_spend, chart_effort_sweep, chart_miss_vs_gap
 
 SCRIPTS = (
     ("https://cdn.jsdelivr.net/npm/vega@6.4.0/build/vega.min.js",
@@ -29,7 +29,8 @@ def render_html(calls: list[Call], table: str, cutoff: float | None) -> str:
     charts = [  # (Vega-Lite spec, how-to-read text shown under the chart)
         (chart_daily_spend.daily_spend_spec(chart_daily_spend.daily_spend_data(calls, cutoff)),
          chart_daily_spend.HELP),
-        (chart_forest.forest_spec(chart_forest.forest_data(calls)), chart_forest.HELP),
+        (chart_effort_sweep.effort_sweep_spec(chart_effort_sweep.effort_sweep_data(calls)),
+         chart_effort_sweep.HELP),
         (chart_miss_vs_gap.miss_vs_gap_spec(chart_miss_vs_gap.miss_vs_gap_data(calls)),
          chart_miss_vs_gap.HELP),
         (chart_ctx_spend.ctx_spend_spec(chart_ctx_spend.ctx_spend_data(calls)), chart_ctx_spend.HELP),
