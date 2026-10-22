@@ -2,7 +2,7 @@
 
 Shows what your [Pi](https://github.com/badlogic/pi-mono) sessions would cost at API prices.
 It reads the session logs in `~/.pi/agent/sessions` and groups the cost by model, thinking effort
-and context size. It is one Python script without dependencies.
+and context size, and can write an HTML report with charts. Plain Python, no dependencies.
 
 ## Run with nix
 
@@ -11,8 +11,13 @@ nix run github:fdietze/context-efficiency-metrics -- --since 7d --all-projects
 ```
 
 Pick the sessions with `--last N`, `--since 3d` or session files. Group with `--by`, for example
-`--by model,effort` (default), `--by ctx` or `--by model,effort,ctx`.
+`--by kind,model,effort` (default), `--by ctx` or `--by model,effort,ctx`.
 Set the context ranges with `--ctx-edges 50k,100k,200k`. `--wide` shows all columns. `--help` shows the rest.
+
+`--html report.html` also writes a report: daily spend and waste, cost and thinking per effort
+level, cache-miss probability versus pause length, and spend by context size. Each chart says how
+to read it. The file embeds only aggregates (no prompts or paths) and loads Vega from a CDN at
+pinned, hash-checked versions.
 
 ## Install as flake input
 
@@ -48,6 +53,8 @@ TOTAL   761.1975  25.5   146.61       111378   0.428      72        15163
 - `ctx_p50`: median context: what the model read in one call (input + cache read + cache write).
 - `think/out`: share of output tokens that were thinking.
 - `sessions`: compare groups by this, not by `calls`. Calls in one session are not independent.
+- `kind`: `assistant` (model turns), `cache_warm` (Pi's keep-alive pings during pauses) or `side`
+  (tool summaries, compaction). Kept apart so cheap pings do not distort the real turns.
 - `effort`: comes from the call itself, otherwise from the last thinking level change on its branch,
   otherwise it is `unknown`.
 
