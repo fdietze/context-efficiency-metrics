@@ -44,6 +44,8 @@ ROOT = Path.home() / ".pi/agent/sessions"
 SIDE = "Tools/summaries"  # side LLM calls (tool summaries, compaction), not the main chain
 PARTS = ("input", "output", "cacheRead", "cacheWrite")
 DIMS = ("model", "effort", "ctx")
+# What it costs, how much is waste, how efficient, why (context, thinking), how much evidence.
+DEFAULT_COLUMNS = ("total$", "miss%", "total$/Mvis", "ctx_p50", "think/out", "sessions", "calls")
 EFFORTS = ("off", "minimal", "low", "medium", "high", "xhigh", "max", "unknown")
 
 
@@ -190,6 +192,7 @@ def main():
                    help="comma list of grouping dimensions: model, effort, ctx (default: model,effort)")
     p.add_argument("--ctx-edges", type=ctx_edges, default=ctx_edges("50k,100k,200k,400k"), metavar="E",
                    help="context range boundaries for --by ctx (default: 50k,100k,200k,400k)")
+    p.add_argument("--wide", action="store_true", help="show all columns, not just the default ones")
     a = p.parse_args()
     by = [d.strip() for d in a.by.split(",") if d.strip()]
     if not set(by) <= set(DIMS):
@@ -260,28 +263,37 @@ def main():
                 EFFORTS.index(v["effort"]) if v.get("effort") in EFFORTS else len(EFFORTS),
                 v.get("ctx", 0))
 
-    hdr = dims + ["sessions", "calls", "calls/sess", "ctx_p50", "ctx_p90", "ctx_max", "total$", "$/call",
-                  "input$", "output$", "cacheRead$", "cacheWrite$", "miss$", "miss%", "total/out$", "think/out", "total$/Mout", "total$/Mvis",
-                  "in_tok", "out_tok", "cacheRead_tok", "cacheWrite_tok"]
+    def metrics(g: Group) -> dict[str, str]:
+        r, c = g.sums, sorted(g.ctx)
+        # Some providers report reasoning > output; the clamp keeps visible tokens >= 0.
+        visible = max(0, g.think_out - g.think)
+        n = len(g.sessions)
+        return {
+            "total$": f"{r['total$']:.4f}",
+            "miss%": f"{r['miss$'] / r['total$'] * 100:.1f}" if r["total$"] else "-",
+            "total$/Mvis": f"{g.think_cost / visible * 1e6:.2f}" if visible else "-",
+            "ctx_p50": f"{int(statistics.median(c))}" if c else "-",
+            "think/out": f"{g.think / g.think_out:.3f}" if g.think_out else "-",
+            "sessions": str(n),
+            "calls": str(g.calls),
+            "calls/sess": f"{g.calls / n:.1f}",
+            "ctx_p90": f"{percentile(c, 0.9)}" if len(c) >= 10 else "-",
+            "ctx_max": f"{c[-1]}" if c else "-",
+            "$/call": f"{r['total$'] / g.calls:.4f}",
+            **{k: f"{r[k]:.4f}" for k in ("input$", "output$", "cacheRead$", "cacheWrite$", "miss$")},
+            "total/out$": f"{r['total$'] / r['output$']:.1f}" if r["output$"] else "-",
+            "total$/Mout": f"{r['total$'] / r['output_tok'] * 1e6:.2f}" if r["output_tok"] else "-",
+            **{k + "_tok": f"{int(r[k + '_tok'])}" for k in PARTS},
+        }
+
+    # Insertion order of metrics() is the --wide column order; DEFAULT_COLUMNS is its prefix.
+    cols = list(metrics(total)) if a.wide else list(DEFAULT_COLUMNS)
+    hdr = dims + cols
     out = [hdr]
 
     def row(label: list[str], g: Group):
-        r, c = g.sums, sorted(g.ctx)
-        per_out = f"{r['total$'] / r['output$']:.1f}" if r["output$"] else "-"
-        miss_pct = f"{r['miss$'] / r['total$'] * 100:.1f}" if r["total$"] else "-"
-        think = f"{g.think / g.think_out:.3f}" if g.think_out else "-"
-        per_mout = f"{r['total$'] / r['output_tok'] * 1e6:.2f}" if r["output_tok"] else "-"
-        # Some providers report reasoning > output; the clamp keeps visible tokens >= 0.
-        visible = max(0, g.think_out - g.think)
-        per_mvis = f"{g.think_cost / visible * 1e6:.2f}" if visible else "-"
-        per_call = f"{r['total$'] / g.calls:.4f}" if g.calls else "-"
-        n = len(g.sessions)
-        return (label + [str(n), str(g.calls), f"{g.calls / n:.1f}",
-                         f"{int(statistics.median(c))}" if c else "-",
-                         f"{percentile(c, 0.9)}" if len(c) >= 10 else "-", f"{c[-1]}" if c else "-",
-                         f"{r['total$']:.4f}", per_call]
-                + [f"{r[k]:.4f}" for k in ("input$", "output$", "cacheRead$", "cacheWrite$", "miss$")]
-                + [miss_pct, per_out, think, per_mout, per_mvis] + [f"{int(r[k + '_tok'])}" for k in PARTS])
+        m = metrics(g)
+        return label + [m[c] for c in cols]
 
     for k in sorted(groups, key=order):
         label = [ctx_label(a.ctx_edges, v) if d == "ctx" else str(v) for d, v in zip(dims, k)]
