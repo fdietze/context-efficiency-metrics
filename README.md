@@ -30,13 +30,13 @@ Set the context ranges with `--ctx-edges 50k,100k,200k`. `--help` shows the rest
 `context-efficiency-metrics --since 7d --all-projects --by effort` (shortened, there are more columns for cost parts and tokens):
 
 ```
-29 main + 42 subagent session files, 14431 calls; effort from message 14425, from history 6, unknown 0
-effort  sessions  calls  calls/sess  ctx_p50  ctx_p90  total$    miss$     $/call  total/out$  think/out
-medium  16        3566   222.9       111454   269793   222.9327  26.3348   0.0625  10.4        0.388
-high    63        10490  166.5       113634   208452   479.2638  149.4992  0.0457  6.8         0.371
-xhigh   5         132    26.4        73868    179732   4.5663    1.6367    0.0346  6.4         0.347
-max     2         243    121.5       112794   180241   1.4292    1.0289    0.0059  18.5        0.652
-TOTAL   71        14431  203.3       112612   223863   708.1920  178.4995  0.0491  7.6         0.377
+27 main + 45 subagent session files, 15152 calls; effort from message 15130, from history 22, unknown 0
+effort  sessions  calls  calls/sess  ctx_p50  ctx_p90  total$    miss$     miss%  $/call  total/out$  think/out  total$/Mvis
+medium  16        3597   224.8       111200   269014   220.6096  24.5853   11.1   0.0613  10.2        0.389      238.61
+high    58        10117  174.4       113097   210961   457.8480  156.5434  34.2   0.0453  6.6         0.375      124.62
+xhigh   5         132    26.4        73868    179732   4.5663    1.6367    35.8   0.0346  6.4         0.347      98.66
+max     8         1306   163.2       103688   149233   77.2697   11.3714   14.7   0.0592  2.6         0.659      142.24
+TOTAL   72        15152  210.4       111379   216489   760.2935  194.1367  25.5   0.0502  6.3         0.427      146.57
 ```
 
 - `ctx`: what the model read in one call: input + cache read + cache write tokens.
@@ -48,6 +48,9 @@ TOTAL   71        14431  203.3       112612   223863   708.1920  178.4995  0.049
 - `miss$`: money spent on cache misses: context that was already cached, but had to be
   processed again, e.g. because the cache expired during a pause. Turn on Pi's `cacheWarming`
   or `PI_CACHE_RETENTION=long` to lower it.
+- `miss%`: `miss$` as share of `total$`. This is the best number to optimize: it is pure waste,
+  so lowering it never makes the real work worse. Watch `total$` too, so cost does not just move
+  to another column.
 - `think/out`: share of output tokens that were thinking.
 - `total$/Mvis`: dollars per million visible output tokens (output without thinking).
   More thinking makes `total$/Mout` look better while you pay more; this one does not.

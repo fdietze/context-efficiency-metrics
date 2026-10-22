@@ -26,6 +26,9 @@ Definitions
              main-model call on the same branch, but had to be processed again
              (cache expired after a pause, model switch, compaction, context edit).
              Part of input$ + cacheWrite$, not extra.
+  miss%      miss$ / total$: share of spend that bought nothing. The safest metric to
+             optimize; check total$ alongside, since e.g. never compacting lowers it
+             while cacheRead$ grows.
   think/out  reasoning tokens / output tokens (providers count thinking as output),
              over calls whose usage reports reasoning. "-" if none do. Some providers
              report 0 instead of omitting the field, which biases this toward 0.
@@ -258,13 +261,14 @@ def main():
                 v.get("ctx", 0))
 
     hdr = dims + ["sessions", "calls", "calls/sess", "ctx_p50", "ctx_p90", "ctx_max", "total$", "$/call",
-                  "input$", "output$", "cacheRead$", "cacheWrite$", "miss$", "total/out$", "think/out", "total$/Mout", "total$/Mvis",
+                  "input$", "output$", "cacheRead$", "cacheWrite$", "miss$", "miss%", "total/out$", "think/out", "total$/Mout", "total$/Mvis",
                   "in_tok", "out_tok", "cacheRead_tok", "cacheWrite_tok"]
     out = [hdr]
 
     def row(label: list[str], g: Group):
         r, c = g.sums, sorted(g.ctx)
         per_out = f"{r['total$'] / r['output$']:.1f}" if r["output$"] else "-"
+        miss_pct = f"{r['miss$'] / r['total$'] * 100:.1f}" if r["total$"] else "-"
         think = f"{g.think / g.think_out:.3f}" if g.think_out else "-"
         per_mout = f"{r['total$'] / r['output_tok'] * 1e6:.2f}" if r["output_tok"] else "-"
         # Some providers report reasoning > output; the clamp keeps visible tokens >= 0.
@@ -277,7 +281,7 @@ def main():
                          f"{percentile(c, 0.9)}" if len(c) >= 10 else "-", f"{c[-1]}" if c else "-",
                          f"{r['total$']:.4f}", per_call]
                 + [f"{r[k]:.4f}" for k in ("input$", "output$", "cacheRead$", "cacheWrite$", "miss$")]
-                + [per_out, think, per_mout, per_mvis] + [f"{int(r[k + '_tok'])}" for k in PARTS])
+                + [miss_pct, per_out, think, per_mout, per_mvis] + [f"{int(r[k + '_tok'])}" for k in PARTS])
 
     for k in sorted(groups, key=order):
         label = [ctx_label(a.ctx_edges, v) if d == "ctx" else str(v) for d, v in zip(dims, k)]
