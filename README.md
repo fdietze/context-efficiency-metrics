@@ -35,15 +35,15 @@ pinned, hash-checked versions.
 `context-efficiency-metrics --since 7d --all-projects --by effort`:
 
 ```
-54 main + 75 subagent session files, 17912 calls; effort from message 16685, from history 995, unknown 232
+55 main + 75 subagent session files, 17956 calls; effort from message 16729, from history 995, unknown 232
 effort   total$    miss%  fold%  total$/Mvis  ctx_p50  think/out  sessions  calls
 low      2.1820    0.0    0.0    47.39        26827    0.077      16        180
-medium   44.1576   40.2   3.8    129.74       83820    0.354      11        990
-high     796.4843  37.7   10.0   160.73       98217    0.402      100       14582
-xhigh    5.6379    30.8   54.1   132.31       103500   0.548      2         84
-max      133.2639  16.8   26.7   155.74       114550   0.650      6         1844
+medium   44.1576   40.2   3.5    129.74       83820    0.354      11        990
+high     799.4247  37.8   9.3    160.72       98156    0.402      101       14626
+xhigh    5.6379    30.8   45.5   132.31       103500   0.548      2         84
+max      133.2639  16.8   24.3   155.74       114550   0.650      6         1844
 unknown  5.4173    0.0    0.0    23350.24     125538   0.000      6         232
-TOTAL    987.1430  34.7   12.2   158.19       99156    0.453      129       17912
+TOTAL    990.0834  34.7   11.2   158.19       99120    0.453      130       17956
 ```
 
 - `miss%`: share of `total$` spent on cache misses: context that was already cached, but had
@@ -53,8 +53,8 @@ TOTAL    987.1430  34.7   12.2   158.19       99156    0.453      129       1791
   `PI_CACHE_RETENTION=long` lower it.
 - `fold%`: share of `total$` spent on context folding (the infinite-context extension): turns
   that call `context_fold`, `context_map`, `context_search` or `context_peek`, plus the cache
-  miss each fold causes. Folding pays off when the smaller context makes later calls cheaper
-  by more than that, which shows as a lower `ctx_p50`.
+  miss each fold causes (that miss is in `miss%` too). Only the cost side: the savings of
+  smaller later contexts are not measured.
 - `total$/Mvis`: dollars per million visible output tokens (output without thinking).
 - `ctx_p50`: median context: what the model read in one call (input + cache read + cache write).
 - `think/out`: share of output tokens that were thinking.

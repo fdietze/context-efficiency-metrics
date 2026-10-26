@@ -52,17 +52,23 @@ class ReadCallsTest(unittest.TestCase):
             assistant("f", "a", iso(3), ms(2), read=1000, write=0, tools=("context_fold",)),
             # The fold rewrote the prefix: only 100 of 1000 cached tokens are read again.
             assistant("b", "f", iso(5), ms(4), read=100, write=400, cost_w=0.4, tools=("bash",)),
-            # A miss after a task turn is not caused by folding.
-            assistant("c", "b", iso(7), ms(6), read=0, write=500, cost_w=0.5),
+            # A miss after a task turn is not caused by folding, so a folding turn pays only its
+            # cost without that miss.
+            assistant("c", "b", iso(7), ms(6), read=0, write=500, cost_w=0.5, tools=("context_map",)),
+            # A folding turn right after a fold: its miss is caused by folding too.
+            assistant("g", "c", iso(9), ms(8), read=500, write=0, tools=("context_fold",)),
+            assistant("h", "g", iso(11), ms(10), read=0, write=500, cost_w=0.5, tools=("context_map",)),
         ])
-        a, f, b, c = calls
+        a, f, b, c, g, h = calls
         self.assertEqual(f.tools, ("context_fold",))
         self.assertAlmostEqual(a.fold_cost, a.cost["total"])
         self.assertAlmostEqual(f.fold_cost, f.cost["total"])
         self.assertAlmostEqual(b.fold_cost, b.miss_cost)
         self.assertAlmostEqual(b.miss_cost, 0.4)  # 400 missed of 400 uncached
         self.assertGreater(c.miss_cost, 0)
-        self.assertEqual(c.fold_cost, 0)
+        self.assertAlmostEqual(c.fold_cost, c.cost["total"] - c.miss_cost)
+        self.assertGreater(h.miss_cost, 0)
+        self.assertAlmostEqual(h.fold_cost, h.cost["total"])
 
     def test_fork_copies_counted_once(self):
         e = assistant("a", None, "2023-11-14T22:13:20Z", 1_700_000_000_000, read=0, write=10)

@@ -129,10 +129,12 @@ def read_calls(files: list[tuple[Path, Path]]) -> tuple[list[Call], ReadStats]:
                 if start is not None and before[1] is not None:
                     gap = max(0.0, start - before[1])
             c = u.get("cost", {})
-            # Folding costs the whole turn that calls a folding tool (the turn exists only for
-            # maintenance; the rare turn that mixes in task tools is counted whole too), plus the
-            # miss of the next main-chain call, because a fold rewrites the cached prompt prefix.
-            fold = c.get("total", 0) if FOLD_TOOLS.intersection(tools) else 0.0
+            # Folding costs the turn that calls a folding tool (the turn exists only for
+            # maintenance; the rare turn that mixes in task tools is counted whole too) minus its
+            # own miss, which a task turn in its place would have paid too (mostly cache expiry
+            # after a pause). Folding does cause the miss of the next main-chain call, because a
+            # fold rewrites the cached prompt prefix.
+            fold = c.get("total", 0) - miss if FOLD_TOOLS.intersection(tools) else 0.0
             if before is not None and before[2]:
                 fold += miss
             calls.append(Call(
