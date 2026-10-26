@@ -11,7 +11,7 @@ assignment, not by when the agent actually folded, because agents also fold unpr
 - Unit: one session file and model. Sessions with more than one assignment (range edited
   mid-session, or the experiment switched on mid-session) are left out.
 - Outcome: all dollars of the unit (including folding and misses, both depend on the limit)
-  per prompt (calls.py Call.after_prompt: work requested from outside). Per task step would
+  per prompt (calls.py Call.after_prompt: new work from the agent's owner). Per task step would
   be biased: folding early adds steps and so lowers the cost per step. Per session, not per
   call: calls of one session are correlated.
 - Cost per prompt is expected to be U-shaped in the limit: a low limit folds often, a high
@@ -36,13 +36,14 @@ SCALE = 1e5      # tokens per fit unit, keeps the sums well conditioned
 
 HELP = ("Each dot is one session (and model) from the reminder-limit experiment: x is the "
         "context size at which the agent was reminded to fold, assigned at random per session; "
-        "y is what the session cost per prompt after its context first reached the lower end "
+        "y is what the session cost per prompt (typical session: the fit uses the logarithm) after its context first reached the lower end "
         "of the range (before that, all sessions behave the same), relative to the cheapest "
         "limit and with the price level of its model taken out. Dot size: number of prompts. "
         "The curve is one fit over all models, weighted by prompts; the shaded band is the range "
         "in which its lowest point plausibly lies (90% over session trees), the vertical line its "
         "median. A band that touches the edge of the range means the cheapest limit may lie "
-        "outside it. A prompt is a user message or a message from another agent; corrective "
+        "outside it. A prompt is new work from the agent's owner: a user message, or for a "
+        "subagent its spawner's message. Corrective "
         "prompts after a bad fold make a limit look cheaper than it is. Cost only: whether the "
         "agent works better or worse with a smaller context is not measured.")
 

@@ -47,7 +47,7 @@ class Call:
     tools: tuple          # names of the tools this call invoked, in order
     fold_cost: float      # dollars spent on context folding (see read_calls)
     nudge_arm: NudgeArm | None  # randomized reminder limit in force, None if not randomized
-    after_prompt: bool    # first call after new external input (see read_calls)
+    after_prompt: bool    # first call after new work from the agent's owner (see read_calls)
 
 
 @dataclass
@@ -105,11 +105,14 @@ def read_calls(files: list[tuple[Path, Path]]) -> tuple[list[Call], ReadStats]:
         # Both maps follow the parent chain, so a call sees the state of the branch it was made on.
         level_at = {}  # entry id -> thinking level in force at that entry
         arm_at = {}    # entry id -> NudgeArm (or None) of the latest settings record
-        # entry id -> external input arrived since the last assistant message. External input is
-        # a user message or an agent-message (a subagent's task, a message between agents); the
-        # agent's own work (tool results, reminders, folding) cannot create it, so it counts work
-        # requested from outside.
+        # entry id -> work requested by whoever owns this agent arrived since the last assistant
+        # message. The owner of a main session is the user; a subagent's owner is its spawner,
+        # whose task and follow-ups arrive as agent-message. Results of work the agent started
+        # itself (subagent replies to the main session, tool results, bash-async completions,
+        # answers to its own questions) and unsolicited messages (corral-message) are no new
+        # work: the agent's own behavior decides how many there are.
         prompt_at = {}
+        owner_messages = ("agent-message",) if f != tree else ()
         # entry id -> (cached prefix tokens, end epoch, called context_fold) of the last main-chain call
         chain_at = {}
         for e in entries(f, stats.torn):
@@ -123,7 +126,7 @@ def read_calls(files: list[tuple[Path, Path]]) -> tuple[list[Call], ReadStats]:
             elif parent in arm_at:
                 arm_at[eid] = arm_at[parent]
             role = (e.get("message") or {}).get("role") if e.get("type") == "message" else None
-            if role == "user" or (e.get("type") == "custom_message" and e.get("customType") == "agent-message"):
+            if role == "user" or (e.get("type") == "custom_message" and e.get("customType") in owner_messages):
                 prompt_at[eid] = True
             elif role == "assistant":
                 prompt_at[eid] = False

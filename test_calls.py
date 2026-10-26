@@ -16,11 +16,11 @@ def assistant(eid, parent, end_iso, start_ms, read, write, inp=0, cost_in=0.0, c
 
 
 class ReadCallsTest(unittest.TestCase):
-    def read(self, lines):
+    def read(self, lines, subagent=False):
         with tempfile.TemporaryDirectory() as d:
             f = Path(d) / "s.jsonl"
             f.write_text("".join(json.dumps(e) + "\n" for e in lines))
-            return read_calls([(f, f)])[0]
+            return read_calls([(f, Path(d) / "main.jsonl" if subagent else f)])[0]
 
     def test_miss_gap_and_kind(self):
         t0 = 1_700_000_000
@@ -83,14 +83,14 @@ class ReadCallsTest(unittest.TestCase):
         self.assertEqual(calls[0].nudge_arm, NudgeArm(tokens=180_000, percent=75.0, low=100_000))
         self.assertIsNone(calls[1].nudge_arm)
 
-    def test_after_prompt_marks_the_first_call_after_external_input(self):
+    def test_after_prompt_marks_the_first_call_after_work_from_the_owner(self):
         msg = lambda eid, parent, role: {"type": "message", "id": eid, "parentId": parent,
                                          "message": {"role": role, "content": []}}
         custom = lambda eid, parent, kind: {"type": "custom_message", "customType": kind, "id": eid,
                                             "parentId": parent, "content": ""}
         ms = lambda s: (1_700_000_400 + s) * 1000
         iso = lambda s: f"2023-11-14T22:20:{s:02d}Z"
-        calls = self.read([
+        lines = [
             msg("u", None, "user"),
             assistant("a", "u", iso(1), ms(0), read=0, write=10),
             msg("t", "a", "toolResult"),
@@ -100,8 +100,11 @@ class ReadCallsTest(unittest.TestCase):
             custom("m", "c", "agent-message"),
             msg("t2", "m", "toolResult"),
             assistant("d", "t2", iso(7), ms(6), read=30, write=10),
-        ])
-        self.assertEqual([c.after_prompt for c in calls], [True, False, False, True])
+        ]
+        # A main session's owner is the user; an agent-message there is a subagent's reply.
+        self.assertEqual([c.after_prompt for c in self.read(lines)], [True, False, False, False])
+        # A subagent's owner is its spawner, whose task arrives as agent-message.
+        self.assertEqual([c.after_prompt for c in self.read(lines, subagent=True)], [True, False, False, True])
 
     def test_fork_copies_counted_once(self):
         e = assistant("a", None, "2023-11-14T22:13:20Z", 1_700_000_000_000, read=0, write=10)
