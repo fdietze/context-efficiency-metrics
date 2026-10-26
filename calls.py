@@ -19,6 +19,16 @@ FOLD_TOOLS = frozenset({FOLD, "context_map", "context_search", "context_peek"})
 
 
 @dataclass(frozen=True, slots=True)
+class NudgeArm:
+    """Reminder limit a branch was randomly assigned by the infinite-context extension
+    (its settings.json `nudgeAtTokens: [low, high]`). The reminder fires at
+    min(tokens, percent% of the model's context window)."""
+    tokens: int           # drawn limit
+    percent: float        # nudgeAtPercent
+    low: int              # lower end of the range the limit was drawn from
+
+
+@dataclass(frozen=True, slots=True)
 class Call:
     tree: Path            # main session file; its subagents share it (the sampling unit)
     session: Path         # the file the call was logged in
@@ -36,6 +46,7 @@ class Call:
     miss_cost: float      # dollars spent re-processing tokens that were cached before
     tools: tuple          # names of the tools this call invoked, in order
     fold_cost: float      # dollars spent on context folding (see read_calls)
+    nudge_arm: NudgeArm | None  # randomized reminder limit in force, None if not randomized
 
 
 @dataclass
@@ -66,6 +77,17 @@ def _usage_of(e: dict):
     return None
 
 
+def _nudge_arm(data) -> NudgeArm | None:
+    """Parses an infinite-context:settings record; None unless the limit was drawn from a range."""
+    if not isinstance(data, dict):
+        return None
+    t, pct, rng = data.get("nudgeAtTokens"), data.get("nudgeAtPercent"), data.get("nudgeAtTokensRange")
+    if not (isinstance(rng, list) and len(rng) == 2 and all(isinstance(x, int) for x in rng)
+            and isinstance(t, int) and isinstance(pct, (int, float)) and rng[0] <= t <= rng[1]):
+        return None
+    return NudgeArm(tokens=t, percent=float(pct), low=rng[0])
+
+
 def _tools_of(e: dict) -> tuple:
     content = (e.get("message") or {}).get("content")
     if not isinstance(content, list):
@@ -81,6 +103,7 @@ def read_calls(files: list[tuple[Path, Path]]) -> tuple[list[Call], ReadStats]:
     for f, tree in files:
         # Both maps follow the parent chain, so a call sees the state of the branch it was made on.
         level_at = {}  # entry id -> thinking level in force at that entry
+        arm_at = {}    # entry id -> NudgeArm (or None) of the latest settings record
         # entry id -> (cached prefix tokens, end epoch, called context_fold) of the last main-chain call
         chain_at = {}
         for e in entries(f, stats.torn):
@@ -89,6 +112,10 @@ def read_calls(files: list[tuple[Path, Path]]) -> tuple[list[Call], ReadStats]:
                 level_at[eid] = e.get("thinkingLevel")
             elif parent in level_at:
                 level_at[eid] = level_at[parent]
+            if e.get("type") == "custom" and e.get("customType") == "infinite-context:settings":
+                arm_at[eid] = _nudge_arm(e.get("data"))
+            elif parent in arm_at:
+                arm_at[eid] = arm_at[parent]
             hit = _usage_of(e)
             u = hit[4] if hit else None
             ctx = sum((u or {}).get(k, 0) for k in ("input", "cacheRead", "cacheWrite"))
@@ -143,5 +170,5 @@ def read_calls(files: list[tuple[Path, Path]]) -> tuple[list[Call], ReadStats]:
                 tokens={k: u.get(k, 0) for k in PARTS},
                 cost={k: c.get(k, 0) for k in PARTS + ("total",)},
                 reasoning=u["reasoning"] if "reasoning" in u else None,
-                miss_cost=miss, tools=tools, fold_cost=fold))
+                miss_cost=miss, tools=tools, fold_cost=fold, nudge_arm=arm_at.get(parent)))
     return calls, stats

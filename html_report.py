@@ -8,7 +8,7 @@ import html, json
 from datetime import datetime
 
 from calls import Call
-import chart_ctx_spend, chart_daily_spend, chart_effort_sweep, chart_miss_vs_gap
+import chart_ctx_spend, chart_daily_spend, chart_effort_sweep, chart_miss_vs_gap, chart_nudge_limit
 
 SCRIPTS = (
     ("https://cdn.jsdelivr.net/npm/vega@6.4.0/build/vega.min.js",
@@ -25,7 +25,7 @@ def _json(spec: dict) -> str:
     return json.dumps(spec, separators=(",", ":")).replace("</", "<\\/")
 
 
-def render_html(calls: list[Call], table: str, cutoff: float | None) -> str:
+def render_html(calls: list[Call], table: str, cutoff: float | None, windows: dict[str, int]) -> str:
     charts = [  # (Vega-Lite spec, how-to-read text shown under the chart)
         (chart_daily_spend.daily_spend_spec(chart_daily_spend.daily_spend_data(calls, cutoff)),
          chart_daily_spend.HELP),
@@ -34,6 +34,8 @@ def render_html(calls: list[Call], table: str, cutoff: float | None) -> str:
         (chart_miss_vs_gap.miss_vs_gap_spec(chart_miss_vs_gap.miss_vs_gap_data(calls)),
          chart_miss_vs_gap.HELP),
         (chart_ctx_spend.ctx_spend_spec(chart_ctx_spend.ctx_spend_data(calls)), chart_ctx_spend.HELP),
+        (chart_nudge_limit.nudge_limit_spec(chart_nudge_limit.nudge_limit_data(calls, windows)),
+         chart_nudge_limit.HELP),
     ]
     specs = [s for s, _ in charts]
     scripts = "\n".join(f'<script src="{u}" integrity="{h}" crossorigin="anonymous"></script>'

@@ -1,7 +1,7 @@
 import json, tempfile, unittest
 from pathlib import Path
 
-from calls import read_calls
+from calls import NudgeArm, read_calls
 
 
 def assistant(eid, parent, end_iso, start_ms, read, write, inp=0, cost_in=0.0, cost_w=0.0, effort="high",
@@ -69,6 +69,19 @@ class ReadCallsTest(unittest.TestCase):
         self.assertAlmostEqual(c.fold_cost, c.cost["total"] - c.miss_cost)
         self.assertGreater(h.miss_cost, 0)
         self.assertAlmostEqual(h.fold_cost, h.cost["total"])
+
+    def test_nudge_arm_follows_the_branch_settings_record(self):
+        record = lambda eid, parent, data: {"type": "custom", "customType": "infinite-context:settings",
+                                            "id": eid, "parentId": parent, "data": data}
+        drawn = {"nudgeAtTokens": 180_000, "nudgeAtPercent": 75, "nudgeAtTokensRange": [100_000, 300_000]}
+        calls = self.read([
+            record("r", None, drawn),
+            assistant("a", "r", "2023-11-14T22:20:01Z", 1_700_000_400_000, read=0, write=10),
+            record("f", "a", {"nudgeAtTokens": 150_000, "nudgeAtPercent": 75}),  # fixed: not randomized
+            assistant("b", "f", "2023-11-14T22:20:03Z", 1_700_000_402_000, read=10, write=10),
+        ])
+        self.assertEqual(calls[0].nudge_arm, NudgeArm(tokens=180_000, percent=75.0, low=100_000))
+        self.assertIsNone(calls[1].nudge_arm)
 
     def test_fork_copies_counted_once(self):
         e = assistant("a", None, "2023-11-14T22:13:20Z", 1_700_000_000_000, read=0, write=10)

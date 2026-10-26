@@ -52,8 +52,9 @@ from pathlib import Path
 
 from calls import read_calls
 from ctx_ranges import ctx_edges
-from session_selection import duration, select_main, subagent_files
+from session_selection import ROOT, duration, select_main, subagent_files
 from html_report import render_html
+from model_windows import model_windows
 from table import DIMS, render_table
 
 
@@ -92,7 +93,8 @@ def main():
     print(table)
     if a.html:
         cutoff = time.time() - a.since if a.since is not None else None
-        a.html.write_text(render_html(calls, table, cutoff))
+        windows = model_windows(ROOT.parent / "models-store.json")
+        a.html.write_text(render_html(calls, table, cutoff, windows))
         print(f"wrote {a.html}", file=sys.stderr)
 
 
