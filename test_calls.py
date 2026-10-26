@@ -83,6 +83,26 @@ class ReadCallsTest(unittest.TestCase):
         self.assertEqual(calls[0].nudge_arm, NudgeArm(tokens=180_000, percent=75.0, low=100_000))
         self.assertIsNone(calls[1].nudge_arm)
 
+    def test_after_prompt_marks_the_first_call_after_external_input(self):
+        msg = lambda eid, parent, role: {"type": "message", "id": eid, "parentId": parent,
+                                         "message": {"role": role, "content": []}}
+        custom = lambda eid, parent, kind: {"type": "custom_message", "customType": kind, "id": eid,
+                                            "parentId": parent, "content": ""}
+        ms = lambda s: (1_700_000_400 + s) * 1000
+        iso = lambda s: f"2023-11-14T22:20:{s:02d}Z"
+        calls = self.read([
+            msg("u", None, "user"),
+            assistant("a", "u", iso(1), ms(0), read=0, write=10),
+            msg("t", "a", "toolResult"),
+            assistant("b", "t", iso(3), ms(2), read=10, write=10),
+            custom("n", "b", "infinite-context/nudge"),  # a reminder is not external input
+            assistant("c", "n", iso(5), ms(4), read=20, write=10),
+            custom("m", "c", "agent-message"),
+            msg("t2", "m", "toolResult"),
+            assistant("d", "t2", iso(7), ms(6), read=30, write=10),
+        ])
+        self.assertEqual([c.after_prompt for c in calls], [True, False, False, True])
+
     def test_fork_copies_counted_once(self):
         e = assistant("a", None, "2023-11-14T22:13:20Z", 1_700_000_000_000, read=0, write=10)
         self.assertEqual(len(self.read([e, e])), 1)
