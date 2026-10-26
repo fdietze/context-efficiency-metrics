@@ -13,7 +13,7 @@ class DailySpendTest(unittest.TestCase):
                  call(cost=9.0, end=noon - 86400)]  # Oct 1, the day the cutoff falls into
         rows = {(r["day"], r.get("model") or r["series"]): r["usd"] for r in daily_spend_data(calls, cutoff=noon - 86400 - 3600)}
         self.assertEqual(rows, {("2026-10-02", "p/m"): 5.5, ("2026-10-02", OVERHEAD[0]): 2.0,
-                                ("2026-10-02", OVERHEAD[1]): 0.5})
+                                ("2026-10-02", OVERHEAD[1]): 0.5, ("2026-10-02", OVERHEAD[2]): 0.0})
 
 
 if __name__ == "__main__":

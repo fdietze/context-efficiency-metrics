@@ -33,6 +33,12 @@ Definitions
   miss%      miss$ / total$: share of spend that bought nothing. The safest metric to
              optimize; check total$ alongside, since e.g. never compacting lowers it
              while cacheRead$ grows.
+  fold%      fold$ / total$. fold$ is the cost of context folding (infinite-context
+             extension): whole calls that invoke context_fold, context_map,
+             context_search or context_peek, plus the miss$ of the main-model call
+             right after a context_fold (a fold rewrites the cached prompt prefix).
+             Its benefit, smaller context in later calls, shows up as lower ctx and
+             cacheRead$, not here.
   think/out  reasoning tokens / output tokens (providers count thinking as output),
              over calls whose usage reports reasoning. "-" if none do. Some providers
              report 0 instead of omitting the field, which biases this toward 0.

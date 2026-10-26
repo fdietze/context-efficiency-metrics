@@ -1,4 +1,4 @@
-"""Daily spend stacked by model, with waste (cache misses + cache-warm pings) as a line."""
+"""Daily spend stacked by model, with overhead (cache misses, cache warming, context folding) as lines."""
 from collections import defaultdict
 from datetime import datetime, timedelta
 
@@ -10,8 +10,11 @@ HELP = ("Bars: what each day cost. The two lines are cache overhead inside the b
         "'cache misses' is context processed again because the cache had expired; "
         "'cache warming' is the cost of keep-alive pings that prevent such misses. "
         "Warming pays off while it stays clearly below the misses it avoids. "
+        "'context folding' is the cost of turns that fold or navigate the context archive, plus "
+        "the miss each fold causes (that miss is also in 'cache misses'). It pays off when the "
+        "smaller context makes later calls cheaper by more than that. "
         "Days before --since are left out because only part of their sessions was read.")
-OVERHEAD = ("cache misses", "cache warming")  # line series, kept in their own field "series"
+OVERHEAD = ("cache misses", "cache warming", "context folding")  # line series, kept in their own field "series"
 
 
 def daily_spend_data(calls: list[Call], cutoff: float | None) -> list[dict]:
@@ -37,6 +40,7 @@ def daily_spend_data(calls: list[Call], cutoff: float | None) -> list[dict]:
             spend[(day, OVERHEAD[1])] += c.cost["total"]
         else:
             spend[(day, OVERHEAD[0])] += c.miss_cost
+        spend[(day, OVERHEAD[2])] += c.fold_cost
     # Bars and lines use separate fields; a shared field would merge their legends.
     return [{"day": d, "series" if m in OVERHEAD else "model": m, "usd": v}
             for (d, m), v in sorted(spend.items())]
@@ -47,7 +51,7 @@ def daily_spend_spec(rows: list[dict]) -> dict:
     y = {"field": "usd", "type": "quantitative", "title": "dollars"}
     return {
         "title": {"text": "Daily spend by model",
-                  "subtitle": "Lines: cache overhead, part of the bars, not extra. Local time."},
+                  "subtitle": "Lines: overhead, part of the bars, not extra. Local time."},
         "data": {"values": rows},
         "width": 640, "height": 260,
         "layer": [
@@ -59,8 +63,8 @@ def daily_spend_spec(rows: list[dict]) -> dict:
             {"transform": [{"filter": "isValid(datum.series)"}],
              "mark": {"type": "line", "point": True, "color": "black"},
              "encoding": {"x": x, "y": y,
-                          "strokeDash": {"field": "series", "type": "nominal", "title": "cache overhead",
-                                         "scale": {"domain": list(OVERHEAD), "range": [[1, 0], [4, 3]]}},
+                          "strokeDash": {"field": "series", "type": "nominal", "title": "overhead",
+                                         "scale": {"domain": list(OVERHEAD), "range": [[1, 0], [4, 3], [1, 3]]}},
                           "tooltip": [{"field": "day", "type": "temporal"}, {"field": "series"},
                                       {"field": "usd", "format": "$.2f"}]}},
         ],

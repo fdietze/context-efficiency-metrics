@@ -8,7 +8,7 @@ from ctx_ranges import ctx_label
 DIMS = ("kind", "model", "effort", "ctx")
 KINDS = ("assistant", "cache_warm", "side")
 # What it costs, how much is waste, how efficient, why (context, thinking), how much evidence.
-DEFAULT_COLUMNS = ("total$", "miss%", "total$/Mvis", "ctx_p50", "think/out", "sessions", "calls")
+DEFAULT_COLUMNS = ("total$", "miss%", "fold%", "total$/Mvis", "ctx_p50", "think/out", "sessions", "calls")
 EFFORTS = ("off", "minimal", "low", "medium", "high", "xhigh", "max", "unknown")
 
 
@@ -28,6 +28,7 @@ class Group:
 
     def add(self, c: Call):
         self.sums["miss$"] += c.miss_cost
+        self.sums["fold$"] += c.fold_cost
         self.calls += 1
         self.sessions.add(c.session)
         if c.reasoning is not None:
@@ -50,6 +51,7 @@ class Group:
         return {
             "total$": f"{r['total$']:.4f}",
             "miss%": f"{r['miss$'] / r['total$'] * 100:.1f}" if r["total$"] else "-",
+            "fold%": f"{r['fold$'] / r['total$'] * 100:.1f}" if r["total$"] else "-",
             "total$/Mvis": f"{self.think_cost / visible * 1e6:.2f}" if visible else "-",
             "ctx_p50": f"{int(statistics.median(c))}" if c else "-",
             "think/out": f"{self.think / self.think_out:.3f}" if self.think_out else "-",
@@ -59,7 +61,7 @@ class Group:
             "ctx_p90": f"{percentile(c, 0.9)}" if len(c) >= 10 else "-",
             "ctx_max": f"{c[-1]}" if c else "-",
             "$/call": f"{r['total$'] / self.calls:.4f}",
-            **{k: f"{r[k]:.4f}" for k in ("input$", "output$", "cacheRead$", "cacheWrite$", "miss$")},
+            **{k: f"{r[k]:.4f}" for k in ("input$", "output$", "cacheRead$", "cacheWrite$", "miss$", "fold$")},
             "total/out$": f"{r['total$'] / r['output$']:.1f}" if r["output$"] else "-",
             "total$/Mout": f"{r['total$'] / r['output_tok'] * 1e6:.2f}" if r["output_tok"] else "-",
             **{k + "_tok": f"{int(r[k + '_tok'])}" for k in PARTS},

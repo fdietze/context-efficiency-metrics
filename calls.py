@@ -13,6 +13,9 @@ from jsonl_entries import entries
 PARTS = ("input", "output", "cacheRead", "cacheWrite")
 # Side calls (tool summaries, compaction) do not log their model; kind="side" identifies them.
 SIDE_MODEL = "-"
+# Tools of the infinite-context extension. Calling one is context maintenance, not task work.
+FOLD = "context_fold"
+FOLD_TOOLS = frozenset({FOLD, "context_map", "context_search", "context_peek"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,6 +34,8 @@ class Call:
     cost: dict            # PARTS and "total" -> dollars
     reasoning: int | None  # reasoning tokens, None if the provider did not report them
     miss_cost: float      # dollars spent re-processing tokens that were cached before
+    tools: tuple          # names of the tools this call invoked, in order
+    fold_cost: float      # dollars spent on context folding (see read_calls)
 
 
 @dataclass
@@ -61,6 +66,13 @@ def _usage_of(e: dict):
     return None
 
 
+def _tools_of(e: dict) -> tuple:
+    content = (e.get("message") or {}).get("content")
+    if not isinstance(content, list):
+        return ()
+    return tuple(b.get("name") for b in content if isinstance(b, dict) and b.get("type") == "toolCall")
+
+
 def read_calls(files: list[tuple[Path, Path]]) -> tuple[list[Call], ReadStats]:
     """Calls of (session file, tree) pairs in file order. Entries copied verbatim by /fork
     and /clone are counted once."""
@@ -69,7 +81,8 @@ def read_calls(files: list[tuple[Path, Path]]) -> tuple[list[Call], ReadStats]:
     for f, tree in files:
         # Both maps follow the parent chain, so a call sees the state of the branch it was made on.
         level_at = {}  # entry id -> thinking level in force at that entry
-        chain_at = {}  # entry id -> (cached prefix tokens, end epoch) of the last main-chain call
+        # entry id -> (cached prefix tokens, end epoch, called context_fold) of the last main-chain call
+        chain_at = {}
         for e in entries(f, stats.torn):
             eid, parent = e.get("id"), e.get("parentId")
             if e.get("type") == "thinking_level_change":
@@ -83,8 +96,9 @@ def read_calls(files: list[tuple[Path, Path]]) -> tuple[list[Call], ReadStats]:
             on_chain = bool(hit) and hit[0] != "side" and ctx > 0
             before = chain_at.get(parent)
             end = _epoch(e["timestamp"]) if u and e.get("timestamp") else None
+            tools = _tools_of(e) if hit else ()
             if on_chain:
-                chain_at[eid] = (u.get("cacheRead", 0) + u.get("cacheWrite", 0), end)
+                chain_at[eid] = (u.get("cacheRead", 0) + u.get("cacheWrite", 0), end, FOLD in tools)
             elif parent in chain_at:
                 chain_at[eid] = chain_at[parent]
             if not u:
@@ -115,11 +129,17 @@ def read_calls(files: list[tuple[Path, Path]]) -> tuple[list[Call], ReadStats]:
                 if start is not None and before[1] is not None:
                     gap = max(0.0, start - before[1])
             c = u.get("cost", {})
+            # Folding costs the whole turn that calls a folding tool (the turn exists only for
+            # maintenance; the rare turn that mixes in task tools is counted whole too), plus the
+            # miss of the next main-chain call, because a fold rewrites the cached prompt prefix.
+            fold = c.get("total", 0) if FOLD_TOOLS.intersection(tools) else 0.0
+            if before is not None and before[2]:
+                fold += miss
             calls.append(Call(
                 tree=tree, session=f, kind=kind, model=model, effort=effort, effort_source=src,
                 start=start, end=end, gap=gap, ctx=ctx,
                 tokens={k: u.get(k, 0) for k in PARTS},
                 cost={k: c.get(k, 0) for k in PARTS + ("total",)},
                 reasoning=u["reasoning"] if "reasoning" in u else None,
-                miss_cost=miss))
+                miss_cost=miss, tools=tools, fold_cost=fold))
     return calls, stats

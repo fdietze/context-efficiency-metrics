@@ -14,9 +14,9 @@ Pick the sessions with `--last N`, `--since 3d` or session files. Group with `--
 `--by kind,model,effort` (default), `--by ctx` or `--by model,effort,ctx`.
 Set the context ranges with `--ctx-edges 50k,100k,200k`. `--wide` shows all columns. `--help` shows the rest.
 
-`--html report.html` also writes a report: daily spend and waste, cost and thinking per effort
-level, cache-miss probability versus pause length, and spend by context size. Each chart says how
-to read it. The file embeds only aggregates (no prompts or paths) and loads Vega from a CDN at
+`--html report.html` also writes a report: daily spend and overhead (cache misses, cache
+warming, context folding), cost and thinking per effort level, cache-miss probability versus
+pause length, and spend by context size. Each chart says how to read it. The file embeds only aggregates (no prompts or paths) and loads Vega from a CDN at
 pinned, hash-checked versions.
 
 ## Install as flake input
@@ -35,13 +35,15 @@ pinned, hash-checked versions.
 `context-efficiency-metrics --since 7d --all-projects --by effort`:
 
 ```
-27 main + 45 subagent session files, 15163 calls; effort from message 15141, from history 22, unknown 0
-effort  total$    miss%  total$/Mvis  ctx_p50  think/out  sessions  calls
-medium  220.6096  11.1   238.61       111200   0.389      16        3597
-high    458.1421  34.2   124.56       113049   0.374      58        10123
-xhigh   4.5663    35.8   98.66        73868    0.347      5         132
-max     77.8796   14.6   143.15       103749   0.662      8         1311
-TOTAL   761.1975  25.5   146.61       111378   0.428      72        15163
+54 main + 75 subagent session files, 17912 calls; effort from message 16685, from history 995, unknown 232
+effort   total$    miss%  fold%  total$/Mvis  ctx_p50  think/out  sessions  calls
+low      2.1820    0.0    0.0    47.39        26827    0.077      16        180
+medium   44.1576   40.2   3.8    129.74       83820    0.354      11        990
+high     796.4843  37.7   10.0   160.73       98217    0.402      100       14582
+xhigh    5.6379    30.8   54.1   132.31       103500   0.548      2         84
+max      133.2639  16.8   26.7   155.74       114550   0.650      6         1844
+unknown  5.4173    0.0    0.0    23350.24     125538   0.000      6         232
+TOTAL    987.1430  34.7   12.2   158.19       99156    0.453      129       17912
 ```
 
 - `miss%`: share of `total$` spent on cache misses: context that was already cached, but had
@@ -49,6 +51,10 @@ TOTAL   761.1975  25.5   146.61       111378   0.428      72        15163
   to optimize: it is pure waste, so lowering it never makes the real work worse. Watch `total$`
   too, so cost does not just move to another column. Pi's `cacheWarming` and
   `PI_CACHE_RETENTION=long` lower it.
+- `fold%`: share of `total$` spent on context folding (the infinite-context extension): turns
+  that call `context_fold`, `context_map`, `context_search` or `context_peek`, plus the cache
+  miss each fold causes. Folding pays off when the smaller context makes later calls cheaper
+  by more than that, which shows as a lower `ctx_p50`.
 - `total$/Mvis`: dollars per million visible output tokens (output without thinking).
 - `ctx_p50`: median context: what the model read in one call (input + cache read + cache write).
 - `think/out`: share of output tokens that were thinking.
