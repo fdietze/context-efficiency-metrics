@@ -108,14 +108,15 @@ def nudge_limit_data(calls: list[Call], windows: dict[str, int],
     units = _units(calls, windows)
     trees = sorted({u["tree"] for u in units})
     fit = _fit(units, [u["prompts"] for u in units]) if len(trees) >= MIN_TREES else None
+    summary = {"kind": "summary", "sessions": len(units), "trees": len(trees)}
     if fit is None:
-        return [{"model": u["model"], "kind": "unit", "dose": u["dose"], "rel": None,
+        return [summary] + [{"model": u["model"], "kind": "unit", "dose": u["dose"], "rel": None,
                  "prompts": u["prompts"]} for u in units]
     b, c, alpha = fit
     lo, hi = min(u["x"] for u in units), max(u["x"] for u in units)
     x0 = _argmin(b, c, lo, hi)
     base = b * x0 + c * x0 * x0  # the curve is drawn relative to its lowest point
-    rows = [{"model": u["model"], "kind": "unit", "dose": u["dose"], "prompts": u["prompts"],
+    rows = [summary] + [{"model": u["model"], "kind": "unit", "dose": u["dose"], "prompts": u["prompts"],
              "rel": math.exp(u["y"] - alpha[u["model"]] - base)} for u in units]
     for i in range(FIT_POINTS):
         x = lo + (hi - lo) * i / (FIT_POINTS - 1)
@@ -134,7 +135,9 @@ def nudge_limit_data(calls: list[Call], windows: dict[str, int],
 
 
 def nudge_limit_spec(rows: list[dict]) -> dict:
-    n = sum(r["kind"] == "unit" for r in rows)
+    (summary,) = [r for r in rows if r["kind"] == "summary"]
+    shown = ("" if summary["trees"] >= MIN_TREES else
+             f" Nothing is drawn below {MIN_TREES} session trees: too few independent sessions to fit.")
     x = {"field": "dose", "type": "quantitative", "scale": {"zero": False},
          "title": "reminder limit in force (tokens)"}
     y = {"field": "rel", "type": "quantitative", "scale": {"zero": False},
@@ -142,8 +145,8 @@ def nudge_limit_spec(rows: list[dict]) -> dict:
     only = lambda kind: [{"filter": f"datum.kind === '{kind}'"}]
     return {
         "title": {"text": "Reminder-limit experiment: cost per prompt",
-                  "subtitle": f"{n} sessions with a randomly assigned limit that reached its range. "
-                              f"Points, fit and band appear from {MIN_TREES} session trees on."},
+                  "subtitle": f"{summary['sessions']} sessions from {summary['trees']} session trees "
+                              f"with a randomly assigned limit that reached its range.{shown}"},
         "data": {"values": rows},
         "width": 600, "height": 300,
         "layer": [

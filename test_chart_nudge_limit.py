@@ -1,7 +1,7 @@
 import math, unittest
 
 from calls import NudgeArm
-from chart_nudge_limit import MIN_PROMPTS, nudge_limit_data
+from chart_nudge_limit import MIN_PROMPTS, nudge_limit_data, nudge_limit_spec
 from test_support import call
 
 WINDOWS = {"p/m": 1_000_000, "p/x": 1_000_000, "p/small": 200_000}
@@ -41,7 +41,9 @@ class NudgeLimitTest(unittest.TestCase):
                  + session("u", 150_000, 1.0, model="p/unknown")
                  + [call(tree="n", ctx=150_000, prompt=True)] * MIN_PROMPTS)  # not randomized
         rows = nudge_limit_data(calls, WINDOWS)
-        self.assertEqual([(r["model"], r["dose"], r["rel"]) for r in rows], [("p/small", 150_000, None)])
+        self.assertEqual([(r["model"], r["dose"], r["rel"]) for r in rows if r["kind"] == "unit"],
+                         [("p/small", 150_000, None)])
+        self.assertIn("1 session trees", nudge_limit_spec(rows)["title"]["subtitle"])
 
 
 if __name__ == "__main__":
