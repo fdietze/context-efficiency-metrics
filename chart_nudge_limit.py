@@ -74,22 +74,25 @@ def _units(calls: list[Call], windows: dict[str, int]) -> list[dict]:
             for u in units.values() if u["prompts"] >= MIN_PROMPTS and u["cost"] > 0]
 
 
+def _model_means(units: list[dict], weights: list[float]) -> dict[str, tuple[float, float, float]]:
+    """Weighted means of x, x^2 and y per model."""
+    groups = defaultdict(list)
+    for u, w in zip(units, weights):
+        groups[u["model"]].append((u, w))
+    return {model: tuple(sum(w * f(u) for u, w in g) / sum(w for _, w in g)
+                         for f in (lambda u: u["x"], lambda u: u["x"] ** 2, lambda u: u["y"]))
+            for model, g in groups.items()}
+
+
 def _fit(units: list[dict], weights: list[float]):
     """Weighted least squares y = alpha[model] + b*x + c*x^2 -> (b, c, alpha), None if b and c
     are not identified. Demeaning x, x^2 and y within each model removes alpha, leaving a
     2x2 system for b and c (Frisch-Waugh-Lovell)."""
-    groups = defaultdict(list)
+    means, s11, s12, s22, t1, t2 = _model_means(units, weights), 0.0, 0.0, 0.0, 0.0, 0.0
     for u, w in zip(units, weights):
-        groups[u["model"]].append((u, w))
-    means, s11, s12, s22, t1, t2 = {}, 0.0, 0.0, 0.0, 0.0, 0.0
-    for model, g in groups.items():
-        sw = sum(w for _, w in g)
-        mx, mq, my = (sum(w * f(u) for u, w in g) / sw
-                      for f in (lambda u: u["x"], lambda u: u["x"] ** 2, lambda u: u["y"]))
-        means[model] = (mx, mq, my)
-        for u, w in g:
-            dx, dq, dy = u["x"] - mx, u["x"] ** 2 - mq, u["y"] - my
-            s11, s12, s22, t1, t2 = s11 + w * dx * dx, s12 + w * dx * dq, s22 + w * dq * dq, t1 + w * dx * dy, t2 + w * dq * dy
+        mx, mq, my = means[u["model"]]
+        dx, dq, dy = u["x"] - mx, u["x"] ** 2 - mq, u["y"] - my
+        s11, s12, s22, t1, t2 = s11 + w * dx * dx, s12 + w * dx * dq, s22 + w * dq * dq, t1 + w * dx * dy, t2 + w * dq * dy
     det = s11 * s22 - s12 * s12
     if det <= 1e-9 * s11 * s22 or det <= 0:
         return None
@@ -110,8 +113,11 @@ def nudge_limit_data(calls: list[Call], windows: dict[str, int],
     fit = _fit(units, [u["prompts"] for u in units]) if len(trees) >= MIN_TREES else None
     summary = {"kind": "summary", "sessions": len(units), "trees": len(trees)}
     if fit is None:
-        return [summary] + [{"model": u["model"], "kind": "unit", "dose": u["dose"], "rel": None,
-                 "prompts": u["prompts"]} for u in units]
+        # No curve: each dot is shown relative to its model's typical session (weighted mean of
+        # log cost per prompt), which takes the price level out as the fit's alpha would.
+        means = _model_means(units, [u["prompts"] for u in units])
+        return [summary] + [{"model": u["model"], "kind": "unit", "dose": u["dose"], "prompts": u["prompts"],
+                             "rel": math.exp(u["y"] - means[u["model"]][2])} for u in units]
     b, c, alpha = fit
     lo, hi = min(u["x"] for u in units), max(u["x"] for u in units)
     x0 = _argmin(b, c, lo, hi)
@@ -136,12 +142,15 @@ def nudge_limit_data(calls: list[Call], windows: dict[str, int],
 
 def nudge_limit_spec(rows: list[dict]) -> dict:
     (summary,) = [r for r in rows if r["kind"] == "summary"]
-    shown = ("" if summary["trees"] >= MIN_TREES else
-             f" Nothing is drawn below {MIN_TREES} session trees: too few independent sessions to fit.")
+    fitted = any(r["kind"] == "fit" for r in rows)
+    shown = ("" if fitted else
+             f" No curve yet: it needs {MIN_TREES} session trees with different limits. Until then each "
+             "dot is relative to its model's typical session.")
     x = {"field": "dose", "type": "quantitative", "scale": {"zero": False},
          "title": "reminder limit in force (tokens)"}
     y = {"field": "rel", "type": "quantitative", "scale": {"zero": False},
-         "title": "cost per prompt, relative to the cheapest limit"}
+         "title": "cost per prompt, relative to the cheapest limit" if fitted
+                  else "cost per prompt, relative to the model's typical session"}
     only = lambda kind: [{"filter": f"datum.kind === '{kind}'"}]
     return {
         "title": {"text": "Reminder-limit experiment: cost per prompt",
@@ -159,7 +168,7 @@ def nudge_limit_spec(rows: list[dict]) -> dict:
                                       {"field": "hi", "format": ",.0f", "title": "95%"},
                                       {"field": "trees", "title": "session trees"}]}},
             {"transform": only("unit"), "mark": {"type": "point", "filled": True, "opacity": 0.6},
-             "encoding": {"x": x, "y": y, "color": {"field": "model", "type": "nominal", "title": None},
+             "encoding": {"x": x, "y": y, "color": {"field": "model", "type": "nominal", "title": None, "legend": {"labelLimit": 0}},
                           "size": {"field": "prompts", "type": "quantitative", "title": "prompts"},
                           "tooltip": [{"field": "model"}, {"field": "dose", "format": ",.0f"},
                                       {"field": "rel", "format": ".2f"}, {"field": "prompts"}]}},

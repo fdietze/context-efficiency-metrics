@@ -34,6 +34,16 @@ class NudgeLimitTest(unittest.TestCase):
         self.assertAlmostEqual(argmin["lo"], 200_000, delta=1)
         self.assertAlmostEqual(argmin["hi"], 200_000, delta=1)
 
+    def test_without_a_curve_dots_are_relative_to_their_model(self):
+        # Four trees only: no fit. p/x costs 10x as much; within each model, one session costs
+        # e^2 = 7.4x the other, so each dot lies e^1 above or below its model's typical session.
+        calls = (session("a", 120_000, 1.0) + session("b", 250_000, math.exp(2))
+                 + session("c", 150_000, 10.0, model="p/x") + session("d", 280_000, 10 * math.exp(2), model="p/x"))
+        rows = nudge_limit_data(calls, WINDOWS)
+        self.assertNotIn("fit", {r["kind"] for r in rows})
+        self.assertEqual(sorted(round(r["rel"], 6) for r in rows if r["kind"] == "unit"),
+                         [round(math.exp(-1), 6)] * 2 + [round(math.exp(1), 6)] * 2)
+
     def test_dose_is_capped_by_the_window_and_mixed_or_short_sessions_are_left_out(self):
         mixed = session("m", 150_000, 1.0) + [call(tree="m", ctx=150_000, arm=None)]
         calls = (session("a", 250_000, 1.0, model="p/small") + mixed
@@ -42,7 +52,7 @@ class NudgeLimitTest(unittest.TestCase):
                  + [call(tree="n", ctx=150_000, prompt=True)] * MIN_PROMPTS)  # not randomized
         rows = nudge_limit_data(calls, WINDOWS)
         self.assertEqual([(r["model"], r["dose"], r["rel"]) for r in rows if r["kind"] == "unit"],
-                         [("p/small", 150_000, None)])
+                         [("p/small", 150_000, 1.0)])
         self.assertIn("1 session trees", nudge_limit_spec(rows)["title"]["subtitle"])
 
 
