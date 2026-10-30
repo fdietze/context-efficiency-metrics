@@ -27,21 +27,31 @@ class FoldPayoffTest(unittest.TestCase):
             # After a pause the cache expired: 42k re-written, 60k fewer than without the fold
             # is capped at what was missed.
             turn(43_000, read=0, miss=42_000 * UNCACHED),
-            # A map-only run (no fold) ends the horizon too.
+            # A look-only run frees nothing: not a saving, and the horizon goes on.
             turn(43_000, tools=("context_map",), fold=0.1),
-            turn(44_000),
+            turn(43_000),
+            # The next fold ends the horizon.
+            turn(43_000, tools=("context_fold",), fold=0.1),
+            turn(40_000),  # frees 7%: another bin
         ]
-        (summary, fold, *bins) = fold_payoff_data(calls)
-        self.assertEqual((summary["folds"], summary["grew"], summary["unfollowed"]), (1, 0, 0))
-        # Later calls: 41k (read 1k), 42k (read 42k), 43k (read 0, so no read price known).
-        save = 60_000 * READ * 2 + 42_000 * UNCACHED
-        self.assertAlmostEqual(fold["freed"], 60_000)
-        self.assertAlmostEqual(fold["share"], 60_000 / 101_000)
-        self.assertEqual(fold["later"], 3)
+        (summary, fold, _, *bins) = fold_payoff_data(calls)
+        self.assertEqual((summary["folds"], summary["grew"], summary["unfollowed"]), (2, 0, 0))
+        # Freed from the run's first call: 100k -> 41k. Later task calls: 41k (read 1k), 42k
+        # (read 42k), 43k (read 0, so no read price known), 43k (read 43k).
+        save = 59_000 * READ * 3 + 42_000 * UNCACHED
+        self.assertAlmostEqual(fold["freed"], 59_000)
+        self.assertAlmostEqual(fold["share"], 0.59)
+        self.assertEqual(fold["later"], 4)
         self.assertAlmostEqual(fold["ratio"], save / 0.6)
-        (b,) = bins
-        self.assertAlmostEqual(b["share"], 0.55)
-        self.assertAlmostEqual(b["mid"], save / 0.6)
+        self.assertAlmostEqual([b for b in bins if b["share"] == 0.55][0]["mid"], save / 0.6)
+
+    def test_a_run_that_folds_twice_counts_both_folds(self):
+        calls = [turn(300_000, tools=("context_fold",), fold=0.2),
+                 turn(150_000, tools=("context_fold",), read=10_000, fold=0.2),
+                 turn(50_000, read=10_000, fold=0.1), turn(50_000)]
+        (summary, fold, *_) = fold_payoff_data(calls)
+        self.assertEqual(summary["folds"], 1)
+        self.assertAlmostEqual(fold["share"], 250_000 / 300_000)
 
     def test_folds_left_out(self):
         calls = [turn(100_000), turn(100_000, tools=("context_fold",), fold=0.2),

@@ -3,12 +3,15 @@
 - Fold: per session file, a maximal run of assistant calls using folding tools
   (calls.py FOLD_TOOLS) that contains at least one context_fold call. File order stands in
   for the chain; branches inside one file are rare.
-- Freed: context of the run's last call minus context of the first call after it.
+- Freed: context of the run's first call minus context of the first call after it. A run
+  can fold several times; its cost covers all of them, so its share counts all of them.
 - Cost: Call.fold_cost of the run's calls plus that of the first call after it (the cache
   miss the fold causes). DRY: the same attribution as the fold% column (calls.py read_calls).
 - Savings (counterfactual: the same later calls without this fold), summed over the later
-  calls up to the next fold or the session's end. The next fold would have folded these
-  tokens anyway, so the horizon ends there. Per later call:
+  task calls up to the next fold or the session's end. The next fold would have folded
+  these tokens anyway, so the horizon ends there. A run that only looks (context_map,
+  context_search, context_peek) frees nothing: the horizon goes on, its calls are cost of
+  their own and not counted here. Per later call:
   - freed * cache-read price: each call re-reads that many tokens fewer;
   - min(freed, missed) * (uncached - cache-read price) for a call with a cache miss: after an
     expiry the whole prefix is written again, `freed` tokens fewer. Skipped for the first
@@ -70,14 +73,13 @@ def _folds(calls: list[Call]) -> tuple[list[dict], int]:
             while j < len(cs) and folding(cs[j]):
                 j += 1
             runs.append((i, j))
+        runs = [(i, j) for i, j in runs if any(FOLD in c.tools for c in cs[i:j])]
         for n, (i, j) in enumerate(runs):
-            if not any(FOLD in c.tools for c in cs[i:j]):
-                continue
             if j == len(cs):
                 unfollowed += 1
                 continue
-            later = cs[j:runs[n + 1][0] if n + 1 < len(runs) else len(cs)]
-            ctx, freed = cs[j - 1].ctx, cs[j - 1].ctx - cs[j].ctx
+            later = [c for c in cs[j:runs[n + 1][0] if n + 1 < len(runs) else len(cs)] if not folding(c)]
+            ctx, freed = cs[i].ctx, cs[i].ctx - cs[j].ctx
             folds.append({"tree": cs[i].tree, "model": cs[i].model, "ctx": ctx, "freed": freed,
                           "later": len(later), "cost": sum(c.fold_cost for c in cs[i:j + 1]),
                           "save": _later_savings(freed, later) if freed > 0 else 0.0})
