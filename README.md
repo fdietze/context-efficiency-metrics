@@ -16,7 +16,8 @@ Set the context ranges with `--ctx-edges 50k,100k,200k`. `--wide` shows all colu
 
 `--html report.html` also writes a report: daily spend and overhead (cache misses, cache
 warming, context folding), cost and thinking per effort level, cache-miss probability versus
-pause length, spend by context size, and the reminder-limit experiment of
+pause length, spend by context size, the payoff of a fold against the share of context it
+freed (the dollars it saves later per dollar it costs), and the reminder-limit experiment of
 [pi-infinite-context](https://github.com/fdietze/pi-infinite-context) (`nudgeAtTokens` as a range: cost
 per prompt against the randomly assigned limit, with the cheapest limit and its uncertainty;
 context windows come from Pi's `models-store.json`). Each chart says how to read it. The file embeds only aggregates (no prompts or paths) and loads Vega from a CDN at

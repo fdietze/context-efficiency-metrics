@@ -8,7 +8,7 @@ import html, json
 from datetime import datetime
 
 from calls import Call
-import chart_ctx_spend, chart_daily_spend, chart_effort_sweep, chart_miss_vs_gap, chart_nudge_limit
+import chart_ctx_spend, chart_daily_spend, chart_effort_sweep, chart_fold_payoff, chart_miss_vs_gap, chart_nudge_limit
 
 SCRIPTS = (
     ("https://cdn.jsdelivr.net/npm/vega@6.4.0/build/vega.min.js",
@@ -34,6 +34,7 @@ def render_html(calls: list[Call], table: str, cutoff: float | None, windows: di
         (chart_miss_vs_gap.miss_vs_gap_spec(chart_miss_vs_gap.miss_vs_gap_data(calls)),
          chart_miss_vs_gap.HELP),
         (chart_ctx_spend.ctx_spend_spec(chart_ctx_spend.ctx_spend_data(calls)), chart_ctx_spend.HELP),
+        (chart_fold_payoff.fold_payoff_spec(chart_fold_payoff.fold_payoff_data(calls)), chart_fold_payoff.HELP),
         (chart_nudge_limit.nudge_limit_spec(chart_nudge_limit.nudge_limit_data(calls, windows)),
          chart_nudge_limit.HELP),
     ]
