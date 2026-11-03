@@ -1,7 +1,7 @@
-import math, unittest
+import unittest
 
 from calls import NudgeArm
-from chart_nudge_limit import MIN_PROMPTS, nudge_limit_data, nudge_limit_spec
+from chart_nudge_limit import MIN_PROMPTS, _units, nudge_limit_data, nudge_limit_spec
 from test_support import call
 
 WINDOWS = {"p/m": 1_000_000, "p/x": 1_000_000, "p/small": 200_000}
@@ -17,32 +17,23 @@ def session(name, limit, cost_per_prompt, model="p/m", prompts=MIN_PROMPTS, low=
 
 
 class NudgeLimitTest(unittest.TestCase):
-    def test_one_curve_over_models_with_different_prices(self):
-        # Same U in both models, minimum at 200k; p/x costs 10x as much and covers only the
-        # upper half, so a fit without a level per model would move the minimum up.
+    def test_bars_take_out_the_model_price_level(self):
+        # Per model, sessions below 150k cost 1 per prompt and those above 2; p/x costs 10x as
+        # much. With the model's average (1.5) taken out, the bars are 2/3 and 4/3 for both.
         calls = []
-        for i, limit in enumerate(range(100_000, 300_001, 20_000)):
-            calls += session(f"m{i}", limit, math.exp(((limit - 200_000) / 100_000) ** 2))
-            if limit >= 200_000:
-                calls += session(f"x{i}", limit, 10 * math.exp(((limit - 200_000) / 100_000) ** 2), model="p/x")
-        rows = nudge_limit_data(calls, WINDOWS, draws=50)
-        units = [r for r in rows if r["kind"] == "unit"]
-        self.assertEqual(len(units), 17)
-        for r in units:  # model level taken out, call below the range left out
-            self.assertAlmostEqual(r["rel"], math.exp(((r["dose"] - 200_000) / 100_000) ** 2))
-        (argmin,) = [r for r in rows if r["kind"] == "argmin"]
-        self.assertAlmostEqual(argmin["lo"], 200_000, delta=1)
-        self.assertAlmostEqual(argmin["hi"], 200_000, delta=1)
+        for i, limit in enumerate((110_000, 120_000, 130_000, 160_000, 170_000, 180_000)):
+            cost = 1.0 if limit < 150_000 else 2.0
+            calls += session(f"m{i}", limit, cost) + session(f"x{i}", limit, 10 * cost, model="p/x")
+        bins = [r for r in nudge_limit_data(calls, WINDOWS) if r["kind"] == "bin"]
+        self.assertEqual([r["range"] for r in bins], ["100-150k", "150-200k"])
+        for r, want in zip(bins, (2 / 3, 4 / 3)):
+            for q in ("lo", "mid", "hi"):
+                self.assertAlmostEqual(r[q], want)
 
-    def test_without_a_curve_dots_are_relative_to_their_model(self):
-        # Four trees only: no fit. p/x costs 10x as much; within each model, one session costs
-        # e^2 = 7.4x the other, so each dot lies e^1 above or below its model's typical session.
-        calls = (session("a", 120_000, 1.0) + session("b", 250_000, math.exp(2))
-                 + session("c", 150_000, 10.0, model="p/x") + session("d", 280_000, 10 * math.exp(2), model="p/x"))
+    def test_bins_with_too_few_trees_get_no_bar(self):
+        calls = sum((session(t, 120_000, 1.0) for t in "ab"), []) + sum((session(t, 220_000, 1.0) for t in "cde"), [])
         rows = nudge_limit_data(calls, WINDOWS)
-        self.assertNotIn("fit", {r["kind"] for r in rows})
-        self.assertEqual(sorted(round(r["rel"], 6) for r in rows if r["kind"] == "unit"),
-                         [round(math.exp(-1), 6)] * 2 + [round(math.exp(1), 6)] * 2)
+        self.assertEqual([r["range"] for r in rows if r["kind"] == "bin"], ["200-250k"])
 
     def test_dose_is_capped_by_the_window_and_mixed_or_short_sessions_are_left_out(self):
         mixed = session("m", 150_000, 1.0) + [call(tree="m", ctx=150_000, arm=None)]
@@ -50,9 +41,9 @@ class NudgeLimitTest(unittest.TestCase):
                  + session("s", 150_000, 1.0, prompts=MIN_PROMPTS - 1)
                  + session("u", 150_000, 1.0, model="p/unknown")
                  + [call(tree="n", ctx=150_000, prompt=True)] * MIN_PROMPTS)  # not randomized
+        self.assertEqual([(u["model"], u["dose"]) for u in _units(calls, WINDOWS)], [("p/small", 150_000)])
         rows = nudge_limit_data(calls, WINDOWS)
-        self.assertEqual([(r["model"], r["dose"], r["rel"]) for r in rows if r["kind"] == "unit"],
-                         [("p/small", 150_000, 1.0)])
+        self.assertEqual(rows, [{"kind": "summary", "sessions": 1, "trees": 1}])
         self.assertIn("1 session trees", nudge_limit_spec(rows)["title"]["subtitle"])
 
 

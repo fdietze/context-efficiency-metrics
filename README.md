@@ -19,7 +19,7 @@ warming, context folding), cost and thinking per effort level, cache-miss probab
 pause length, spend by context size, the payoff of a fold against the share of context it
 freed (the dollars it saves later per dollar it costs), and the reminder-limit experiment of
 [pi-infinite-context](https://github.com/fdietze/pi-infinite-context) (`nudgeAtTokens` as a range: cost
-per prompt against the randomly assigned limit, with the cheapest limit and its uncertainty;
+per prompt per band of the randomly assigned limit, with a 90% interval;
 context windows come from Pi's `models-store.json`). Each chart says how to read it. The file embeds only aggregates (no prompts or paths) and loads Vega from a CDN at
 pinned, hash-checked versions.
 

@@ -14,38 +14,33 @@ assignment, not by when the agent actually folded, because agents also fold unpr
   per prompt (calls.py Call.after_prompt: new work from the agent's owner). Per task step would
   be biased: folding early adds steps and so lowers the cost per step. Per session, not per
   call: calls of one session are correlated.
-- Cost per prompt is expected to be U-shaped in the limit: a low limit folds often, a high
-  one re-reads a larger context on every call. Models differ in price by orders of
-  magnitude, so the fit is log(cost per prompt) = alpha[model] + b*x + c*x^2: one shared
-  curve, one level per model (fixed effects, solved by demeaning within each model,
-  Frisch-Waugh-Lovell). A model seen in one unit only sets its own level and does not move
-  the curve. The interval of the cheapest limit comes from a Bayesian bootstrap over session
-  trees (bayesian_bootstrap.py explains the resampling unit).
+- Models differ in price by orders of magnitude, so each unit's dollars are divided by its
+  model's average cost per prompt over all units (1 = average for that model). The question
+  the chart answers is whether some limit is cheaper; a bar per BIN_TOKENS of limit answers
+  it without assuming a curve shape (KISS).
+- Bar: sum of normalized dollars / sum of prompts of the bin's units; interval from a Bayesian
+  bootstrap over session trees (bayesian_bootstrap.py explains the resampling unit). The
+  model averages are not redrawn per draw, which makes the interval slightly narrow.
 """
-import math
-import random
 from collections import defaultdict
 
-from bayesian_bootstrap import QUANTILES
+from bayesian_bootstrap import ratio_interval
 from calls import SIDE_MODEL, Call
 
-MIN_PROMPTS = 3  # fewer prompts after the crossing: too noisy to place a point
-MIN_TREES = 5    # fewer independent session trees: no fit
-FIT_POINTS = 50  # points of the drawn curve
-SCALE = 1e5      # tokens per fit unit, keeps the sums well conditioned
+MIN_PROMPTS = 3        # fewer prompts after the crossing: too noisy to count the session
+MIN_TREES = 3          # fewer session trees in a bin: the bootstrap interval collapses, no bar
+BIN_TOKENS = 50_000    # width of a bar in reminder-limit tokens
 
-HELP = ("Each dot is one session (and model) from the reminder-limit experiment: x is the "
-        "context size at which the agent was reminded to fold, assigned at random per session; "
-        "y is what the session cost per prompt (typical session: the fit uses the logarithm) after its context first reached the lower end "
-        "of the range (before that, all sessions behave the same), relative to the cheapest "
-        "limit and with the price level of its model taken out. Dot size: number of prompts. "
-        "The curve is one fit over all models, weighted by prompts; the shaded band is the range "
-        "in which its lowest point plausibly lies (90% over session trees), the vertical line its "
-        "median. A band that touches the edge of the range means the cheapest limit may lie "
-        "outside it. A prompt is new work from the agent's owner: a user message, or for a "
-        "subagent its spawner's message. Corrective "
-        "prompts after a bad fold make a limit look cheaper than it is. Cost only: whether the "
-        "agent works better or worse with a smaller context is not measured.")
+HELP = ("Is some reminder limit cheaper? In the reminder-limit experiment each session is "
+        "reminded to fold at a random context size. Each bar is the sessions whose limit fell in "
+        "its range: their cost per prompt, with each model's price level taken out (1 = that "
+        "model's average). The whisker is a 90% interval over session trees. Bars with "
+        "overlapping whiskers are not clearly different. Only cost after the context first "
+        "reached the lower end of the range counts (before that, all sessions behave the same). "
+        "A prompt is new work from the agent's owner: a user message, or for a subagent its "
+        "spawner's message. Corrective prompts after a bad fold make a limit look cheaper than "
+        "it is. Cost only: whether the agent works better or worse with a smaller context is "
+        "not measured.")
 
 
 def _units(calls: list[Call], windows: dict[str, int]) -> list[dict]:
@@ -70,109 +65,52 @@ def _units(calls: list[Call], windows: dict[str, int]) -> list[dict]:
                 "dose": min(arm.tokens, arm.percent / 100 * window)})
             u["cost"] += c.cost["total"]
             u["prompts"] += c.kind == "assistant" and c.after_prompt
-    return [{**u, "x": u["dose"] / SCALE, "y": math.log(u["cost"] / u["prompts"])}
-            for u in units.values() if u["prompts"] >= MIN_PROMPTS and u["cost"] > 0]
+    return [u for u in units.values() if u["prompts"] >= MIN_PROMPTS and u["cost"] > 0]
 
 
-def _model_means(units: list[dict], weights: list[float]) -> dict[str, tuple[float, float, float]]:
-    """Weighted means of x, x^2 and y per model."""
-    groups = defaultdict(list)
-    for u, w in zip(units, weights):
-        groups[u["model"]].append((u, w))
-    return {model: tuple(sum(w * f(u) for u, w in g) / sum(w for _, w in g)
-                         for f in (lambda u: u["x"], lambda u: u["x"] ** 2, lambda u: u["y"]))
-            for model, g in groups.items()}
-
-
-def _fit(units: list[dict], weights: list[float]):
-    """Weighted least squares y = alpha[model] + b*x + c*x^2 -> (b, c, alpha), None if b and c
-    are not identified. Demeaning x, x^2 and y within each model removes alpha, leaving a
-    2x2 system for b and c (Frisch-Waugh-Lovell)."""
-    means, s11, s12, s22, t1, t2 = _model_means(units, weights), 0.0, 0.0, 0.0, 0.0, 0.0
-    for u, w in zip(units, weights):
-        mx, mq, my = means[u["model"]]
-        dx, dq, dy = u["x"] - mx, u["x"] ** 2 - mq, u["y"] - my
-        s11, s12, s22, t1, t2 = s11 + w * dx * dx, s12 + w * dx * dq, s22 + w * dq * dq, t1 + w * dx * dy, t2 + w * dq * dy
-    det = s11 * s22 - s12 * s12
-    if det <= 1e-9 * s11 * s22 or det <= 0:
-        return None
-    b, c = (t1 * s22 - t2 * s12) / det, (s11 * t2 - s12 * t1) / det
-    return b, c, {m: my - b * mx - c * mq for m, (mx, mq, my) in means.items()}
-
-
-def _argmin(b: float, c: float, lo: float, hi: float) -> float:
-    """x in [lo, hi] where b*x + c*x^2 is lowest."""
-    xs = [lo, hi] + ([-b / (2 * c)] if c > 0 and lo < -b / (2 * c) < hi else [])
-    return min(xs, key=lambda x: b * x + c * x * x)
-
-
-def nudge_limit_data(calls: list[Call], windows: dict[str, int],
-                     draws: int = 1000, seed: int = 0) -> list[dict]:
+def nudge_limit_data(calls: list[Call], windows: dict[str, int]) -> list[dict]:
     units = _units(calls, windows)
-    trees = sorted({u["tree"] for u in units})
-    fit = _fit(units, [u["prompts"] for u in units]) if len(trees) >= MIN_TREES else None
-    summary = {"kind": "summary", "sessions": len(units), "trees": len(trees)}
-    if fit is None:
-        # No curve: each dot is shown relative to its model's typical session (weighted mean of
-        # log cost per prompt), which takes the price level out as the fit's alpha would.
-        means = _model_means(units, [u["prompts"] for u in units])
-        return [summary] + [{"model": u["model"], "kind": "unit", "dose": u["dose"], "prompts": u["prompts"],
-                             "rel": math.exp(u["y"] - means[u["model"]][2])} for u in units]
-    b, c, alpha = fit
-    lo, hi = min(u["x"] for u in units), max(u["x"] for u in units)
-    x0 = _argmin(b, c, lo, hi)
-    base = b * x0 + c * x0 * x0  # the curve is drawn relative to its lowest point
-    rows = [summary] + [{"model": u["model"], "kind": "unit", "dose": u["dose"], "prompts": u["prompts"],
-             "rel": math.exp(u["y"] - alpha[u["model"]] - base)} for u in units]
-    for i in range(FIT_POINTS):
-        x = lo + (hi - lo) * i / (FIT_POINTS - 1)
-        rows.append({"kind": "fit", "dose": x * SCALE, "rel": math.exp(b * x + c * x * x - base)})
-    rng, mins = random.Random(seed), []
-    for _ in range(draws):
-        w = {t: rng.expovariate(1.0) for t in trees}
-        f = _fit(units, [w[u["tree"]] * u["prompts"] for u in units])
-        if f is not None:
-            mins.append(_argmin(f[0], f[1], lo, hi) * SCALE)
-    if mins:
-        mins.sort()
-        q = [mins[min(int(p * len(mins)), len(mins) - 1)] for p in QUANTILES]
-        rows.append({"kind": "argmin", "lo": q[0], "mid": q[1], "hi": q[2], "trees": len(trees)})
+    level = defaultdict(lambda: [0.0, 0])
+    for u in units:
+        level[u["model"]][0] += u["cost"]
+        level[u["model"]][1] += u["prompts"]
+    bins = defaultdict(lambda: defaultdict(lambda: [0.0, 0.0]))  # bin -> tree -> [dollars/level, prompts]
+    for u in units:
+        cost, prompts = level[u["model"]]
+        t = bins[int(u["dose"] // BIN_TOKENS)][u["tree"]]
+        t[0] += u["cost"] / (cost / prompts)
+        t[1] += u["prompts"]
+    rows = [{"kind": "summary", "sessions": len(units), "trees": len({u["tree"] for u in units})}]
+    for b, trees in sorted(bins.items()):
+        ci = ratio_interval([tuple(v) for v in trees.values()]) if len(trees) >= MIN_TREES else None
+        if ci:
+            rows.append({"kind": "bin", "range": f"{b * BIN_TOKENS // 1000}-{(b + 1) * BIN_TOKENS // 1000}k",
+                         "lo": ci[0], "mid": ci[1], "hi": ci[2], "trees": len(trees)})
     return rows
 
 
 def nudge_limit_spec(rows: list[dict]) -> dict:
-    (summary,) = [r for r in rows if r["kind"] == "summary"]
-    fitted = any(r["kind"] == "fit" for r in rows)
-    shown = ("" if fitted else
-             f" No curve yet: it needs {MIN_TREES} session trees with different limits. Until then each "
-             "dot is relative to its model's typical session.")
-    x = {"field": "dose", "type": "quantitative", "scale": {"zero": False},
-         "title": "reminder limit in force (tokens)"}
-    y = {"field": "rel", "type": "quantitative", "scale": {"zero": False},
-         "title": "cost per prompt, relative to the cheapest limit" if fitted
-                  else "cost per prompt, relative to the model's typical session"}
-    only = lambda kind: [{"filter": f"datum.kind === '{kind}'"}]
+    (s,) = [r for r in rows if r["kind"] == "summary"]
+    bins = [r for r in rows if r["kind"] == "bin"]
+    x = {"field": "range", "type": "ordinal", "sort": None, "title": "reminder limit (tokens)",
+         "axis": {"labelAngle": 0}}
+    y = {"type": "quantitative", "title": "cost per prompt (1 = average)"}
     return {
-        "title": {"text": "Reminder-limit experiment: cost per prompt",
-                  "subtitle": f"{summary['sessions']} sessions from {summary['trees']} session trees "
-                              f"with a randomly assigned limit that reached its range.{shown}"},
-        "data": {"values": rows},
-        "width": 600, "height": 300,
+        "title": {"text": "Cost per prompt by reminder limit",
+                  "subtitle": f"{s['sessions']} sessions from {s['trees']} session trees, each with a random limit"
+                              + ("" if bins else f". No bar yet: each needs {MIN_TREES} session trees.")},
+        "data": {"values": bins},
+        "width": 400, "height": 250,
         "layer": [
-            {"transform": only("argmin"), "mark": {"type": "rect", "opacity": 0.15, "color": "#4c78a8"},
-             "encoding": {"x": {**x, "field": "lo"}, "x2": {"field": "hi"}}},
-            {"transform": only("argmin"), "mark": {"type": "rule", "color": "#4c78a8"},
-             "encoding": {"x": {**x, "field": "mid"},
-                          "tooltip": [{"field": "mid", "format": ",.0f", "title": "cheapest limit, median"},
-                                      {"field": "lo", "format": ",.0f", "title": "5%"},
-                                      {"field": "hi", "format": ",.0f", "title": "95%"},
+            {"mark": {"type": "bar", "color": "#4c78a8", "opacity": 0.6},
+             "encoding": {"x": x, "y": {**y, "field": "mid"},
+                          "tooltip": [{"field": "mid", "format": ".2f", "title": "median"},
+                                      {"field": "lo", "format": ".2f", "title": "5%"},
+                                      {"field": "hi", "format": ".2f", "title": "95%"},
                                       {"field": "trees", "title": "session trees"}]}},
-            {"transform": only("unit"), "mark": {"type": "point", "filled": True, "opacity": 0.6},
-             "encoding": {"x": x, "y": y, "color": {"field": "model", "type": "nominal", "title": None, "legend": {"labelLimit": 0}},
-                          "size": {"field": "prompts", "type": "quantitative", "title": "prompts"},
-                          "tooltip": [{"field": "model"}, {"field": "dose", "format": ",.0f"},
-                                      {"field": "rel", "format": ".2f"}, {"field": "prompts"}]}},
-            {"transform": only("fit"), "mark": {"type": "line", "color": "black"},
-             "encoding": {"x": x, "y": y}},
+            {"mark": {"type": "rule", "strokeWidth": 2},
+             "encoding": {"x": x, "y": {**y, "field": "lo"}, "y2": {"field": "hi"}}},
+            {"data": {"values": [{"one": 1}]}, "mark": {"type": "rule", "strokeDash": [4, 4]},
+             "encoding": {"y": {**y, "field": "one"}}},
         ],
     }
