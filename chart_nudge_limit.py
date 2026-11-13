@@ -16,9 +16,12 @@ assignment, not by when the agent actually folded, because agents also fold unpr
   call: calls of one session are correlated.
 - Models differ in price by orders of magnitude, so each unit's dollars are divided by its
   model's average cost per prompt over all units (1 = average for that model). The question
-  the chart answers is whether some limit is cheaper; a bar per BIN_TOKENS of limit answers
-  it without assuming a curve shape (KISS).
-- Bar: sum of normalized dollars / sum of prompts of the bin's units; interval from a Bayesian
+  the chart answers is whether some limit is cheaper; a point per BIN_TOKENS of limit answers
+  it without assuming a curve shape (KISS). More, narrower bins mostly show noise: a few large
+  session trees carry most sessions, so a bin with fewer trees gets a wide interval.
+- Points, not bars, because the y axis does not start at 0: the differences are tens of
+  percent, and a bar's length would misstate the value on a zoomed axis.
+- Point: sum of normalized dollars / sum of prompts of the bin's units; interval from a Bayesian
   bootstrap over session trees (bayesian_bootstrap.py explains the resampling unit). The
   model averages are not redrawn per draw, which makes the interval slightly narrow.
 """
@@ -28,13 +31,13 @@ from bayesian_bootstrap import ratio_interval
 from calls import SIDE_MODEL, Call
 
 MIN_PROMPTS = 3        # fewer prompts after the crossing: too noisy to count the session
-MIN_TREES = 3          # fewer session trees in a bin: the bootstrap interval collapses, no bar
-BIN_TOKENS = 50_000    # width of a bar in reminder-limit tokens
+MIN_TREES = 3          # fewer session trees in a bin: the bootstrap interval collapses, no point
+BIN_TOKENS = 50_000    # width of a bin in reminder-limit tokens
 
 HELP = ("Is some reminder limit cheaper? In the reminder-limit experiment each session is "
-        "reminded to fold at a random context size. Each bar is the sessions whose limit fell in "
+        "reminded to fold at a random context size. Each point is the sessions whose limit fell in "
         "its range: their cost per prompt, with each model's price level taken out (1 = that "
-        "model's average). The whisker is a 90% interval over session trees. Bars with "
+        "model's average). The whisker is a 90% interval over session trees. Points with "
         "overlapping whiskers are not clearly different. Only cost after the context first "
         "reached the lower end of the range counts (before that, all sessions behave the same). "
         "A prompt is new work from the agent's owner: a user message, or for a subagent its "
@@ -94,22 +97,22 @@ def nudge_limit_spec(rows: list[dict]) -> dict:
     bins = [r for r in rows if r["kind"] == "bin"]
     x = {"field": "range", "type": "ordinal", "sort": None, "title": "reminder limit (tokens)",
          "axis": {"labelAngle": 0}}
-    y = {"type": "quantitative", "title": "cost per prompt (1 = average)"}
+    y = {"type": "quantitative", "title": "cost per prompt (1 = average)", "scale": {"zero": False}}
     return {
         "title": {"text": "Cost per prompt by reminder limit",
                   "subtitle": f"{s['sessions']} sessions from {s['trees']} session trees, each with a random limit"
-                              + ("" if bins else f". No bar yet: each needs {MIN_TREES} session trees.")},
+                              + ("" if bins else f". No point yet: each needs {MIN_TREES} session trees.")},
         "data": {"values": bins},
         "width": 400, "height": 250,
         "layer": [
-            {"mark": {"type": "bar", "color": "#4c78a8", "opacity": 0.6},
+            {"mark": {"type": "rule", "strokeWidth": 2},
+             "encoding": {"x": x, "y": {**y, "field": "lo"}, "y2": {"field": "hi"}}},
+            {"mark": {"type": "point", "filled": True, "size": 80, "color": "#4c78a8", "opacity": 1},
              "encoding": {"x": x, "y": {**y, "field": "mid"},
                           "tooltip": [{"field": "mid", "format": ".2f", "title": "median"},
                                       {"field": "lo", "format": ".2f", "title": "5%"},
                                       {"field": "hi", "format": ".2f", "title": "95%"},
                                       {"field": "trees", "title": "session trees"}]}},
-            {"mark": {"type": "rule", "strokeWidth": 2},
-             "encoding": {"x": x, "y": {**y, "field": "lo"}, "y2": {"field": "hi"}}},
             {"data": {"values": [{"one": 1}]}, "mark": {"type": "rule", "strokeDash": [4, 4]},
              "encoding": {"y": {**y, "field": "one"}}},
         ],

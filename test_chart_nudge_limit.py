@@ -17,9 +17,9 @@ def session(name, limit, cost_per_prompt, model="p/m", prompts=MIN_PROMPTS, low=
 
 
 class NudgeLimitTest(unittest.TestCase):
-    def test_bars_take_out_the_model_price_level(self):
+    def test_points_take_out_the_model_price_level(self):
         # Per model, sessions below 150k cost 1 per prompt and those above 2; p/x costs 10x as
-        # much. With the model's average (1.5) taken out, the bars are 2/3 and 4/3 for both.
+        # much. With the model's average (1.5) taken out, the points are 2/3 and 4/3 for both.
         calls = []
         for i, limit in enumerate((110_000, 120_000, 130_000, 160_000, 170_000, 180_000)):
             cost = 1.0 if limit < 150_000 else 2.0
@@ -30,7 +30,7 @@ class NudgeLimitTest(unittest.TestCase):
             for q in ("lo", "mid", "hi"):
                 self.assertAlmostEqual(r[q], want)
 
-    def test_bins_with_too_few_trees_get_no_bar(self):
+    def test_bins_with_too_few_trees_get_no_point(self):
         calls = sum((session(t, 120_000, 1.0) for t in "ab"), []) + sum((session(t, 220_000, 1.0) for t in "cde"), [])
         rows = nudge_limit_data(calls, WINDOWS)
         self.assertEqual([r["range"] for r in rows if r["kind"] == "bin"], ["200-250k"])
